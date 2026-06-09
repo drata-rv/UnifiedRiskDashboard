@@ -4,20 +4,21 @@ Excel workbook builder for the FirstService Risk Dashboard.
 Generates a multi-sheet workbook with:
   - Dashboard sheet  : overview of all tenants with summary metrics
   - [Tenant] sheets  : one per tenant, with dual heatmap + risk details table
-  - All Risks sheet  : consolidated, filterable view across all tenants
+  - All Risks sheet  : consolidated, sortable/filterable flat table across all tenants
 
 Layout decisions:
   - Columns A-M are shared by both the heatmap block (rows 5-11) and the risk
     table (row 13+). Column widths are optimized for the table; the heatmap
     cells end up wide rectangles rather than squares, which is fine for readability.
   - Inherent heatmap uses cols B (impact label) + C-F (grid).
-  - Residual heatmap uses col H (label) + I-L (grid).
-  - Both heatmaps show risk sequence numbers inside cells; the full details are
-    in the risk table below, keyed to the same sequence numbers.
+  - Residual heatmap uses col H (label) + I-L (grid), with position computed
+    dynamically so the two heatmaps never overlap regardless of grid scale.
+  - Sequence numbers are assigned globally per tenant (sorted by tier → score desc
+    → title), so heatmap cell labels (#1, #2…) and table row numbers always match.
 """
 
 from datetime import datetime
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from openpyxl import Workbook
 from openpyxl.styles import (
@@ -36,7 +37,6 @@ from models import (
     Risk,
     TenantData,
     heatmap_cell_color,
-    level_label,
     score_to_tier,
 )
 
@@ -47,11 +47,11 @@ from models import (
 FONT_NAME = "Calibri"
 
 # Default grid scale for FirstService (4×4 per their CC Excel draft).
-# _heatmap_scale() detects the actual scale from live data and uses whichever
+# _grid_size() detects the actual scale from live data and uses whichever
 # is larger — so a 4-level config stays at 4×4, but a 5-level config gets 5×5.
 DEFAULT_GRID_SIZE = 4
 
-# Level display labels.  Keys beyond 5 fall back to "Level N".
+# Level display labels. Keys beyond 5 fall back to "Level N".
 LEVEL_SHORT = {
     1: "Low",
     2: "Moderate",
@@ -60,6 +60,9 @@ LEVEL_SHORT = {
     5: "Critical",
 }
 
+# Severity tier sort order (worst first). Used for seq numbering and All Risks sort.
+_TIER_ORDER = {"Very High": 0, "High": 1, "Moderate": 2, "Low": 3, "Unscored": 4}
+
 
 def _grid_size(risks: list) -> int:
     """
@@ -67,25 +70,38 @@ def _grid_size(risks: list) -> int:
 
     Takes the max of DEFAULT_GRID_SIZE and the largest impact/likelihood value
     actually present in the data, so a standard 4×4 tenant stays 4×4 while a
-    tenant that has been configured with a 5+ level scale gets a bigger grid.
-    Capped at 7 to keep the heatmap readable.
+    tenant configured with a 5+ level scale gets a bigger grid. Capped at 7.
     """
     max_val = DEFAULT_GRID_SIZE
     for r in risks:
         for val in (r.impact, r.likelihood, r.residual_impact, r.residual_likelihood):
             if val is not None:
                 max_val = max(max_val, val)
-    return min(max_val, 7)   # cap at 7 × 7
+    return min(max_val, 7)
+
+
+def _build_seq_map(risks: List[Risk]) -> Dict[int, int]:
+    """
+    Assign a global sequence number to each risk, sorted by tier → score desc → title.
+
+    Used so heatmap cell labels (#1, #2…) and risk table row numbers always refer
+    to the same risk. Both the heatmap and the table receive the same seq_map.
+    """
+    ordered = sorted(
+        risks,
+        key=lambda r: (_TIER_ORDER.get(r.severity_tier, 99), -(r.score or 0), r.title),
+    )
+    return {r.id: i for i, r in enumerate(ordered, start=1)}
 
 
 def _level_label_short(level: int) -> str:
     return LEVEL_SHORT.get(level, f"L{level}")
 
-# Heatmap block anchor positions (1-indexed, as openpyxl expects)
+
+# Heatmap anchor positions (1-indexed, as openpyxl expects)
 HEATMAP_START_ROW    = 5   # First row of the heatmap section on each tenant sheet
 HEATMAP_INHERENT_COL = 2   # Col B — impact labels for inherent heatmap
-# Residual heatmap column is computed dynamically from grid_size in _build_tenant_sheet
-# to ensure the two heatmaps never overlap regardless of grid scale.
+# Residual heatmap column computed dynamically in _build_tenant_sheet
 
 # Column index → semantic meaning (for the risk details table)
 COL_SEQ          = 1   # A  — sequence #
@@ -106,44 +122,43 @@ TABLE_LAST_COL = COL_CATEGORIES
 
 # Column widths (chars). Wide cols serve the table; heatmap adapts.
 COLUMN_WIDTHS = {
-    COL_SEQ:       5,
-    COL_STATEMENT: 45,   # Risk Statement (wide) / impact labels in heatmap
-    COL_IMPACT:    13,
-    COL_LIKELIHOOD:13,
-    COL_SCORE:      8,
-    COL_TREATMENT: 20,
-    COL_DETAILS:   40,   # Treatment details (wide) / visual gap in heatmap
-    COL_STATUS:    13,
-    COL_RES_IMPACT:13,
-    COL_RES_LIKELY:13,
-    COL_RES_SCORE:  8,
-    COL_OWNERS:    22,
-    COL_CATEGORIES:22,
+    COL_SEQ:        5,
+    COL_STATEMENT:  45,   # Risk Statement / impact labels in heatmap
+    COL_IMPACT:     13,
+    COL_LIKELIHOOD: 13,
+    COL_SCORE:       8,
+    COL_TREATMENT:  20,
+    COL_DETAILS:    40,   # Treatment details / visual gap in heatmap
+    COL_STATUS:     13,
+    COL_RES_IMPACT: 13,
+    COL_RES_LIKELY: 13,
+    COL_RES_SCORE:   8,
+    COL_OWNERS:     22,
+    COL_CATEGORIES: 22,
 }
 
-# Table column headers (row 13 on tenant sheets)
+# Table column headers (order matches TABLE_HEADERS constant)
 TABLE_HEADERS = [
-    ("#",             COL_SEQ),
-    ("Risk Statement",COL_STATEMENT),
-    ("Impact",        COL_IMPACT),
-    ("Likelihood",    COL_LIKELIHOOD),
-    ("Score",         COL_SCORE),
-    ("Treatment Plan",COL_TREATMENT),
-    ("Treatment Details", COL_DETAILS),
-    ("Status",        COL_STATUS),
-    ("Residual Impact",   COL_RES_IMPACT),
+    ("#",                   COL_SEQ),
+    ("Risk Statement",      COL_STATEMENT),
+    ("Impact",              COL_IMPACT),
+    ("Likelihood",          COL_LIKELIHOOD),
+    ("Score",               COL_SCORE),
+    ("Treatment Plan",      COL_TREATMENT),
+    ("Treatment Details",   COL_DETAILS),
+    ("Status",              COL_STATUS),
+    ("Residual Impact",     COL_RES_IMPACT),
     ("Residual Likelihood", COL_RES_LIKELY),
-    ("Residual Score",    COL_RES_SCORE),
-    ("Owners",        COL_OWNERS),
-    ("Categories",    COL_CATEGORIES),
+    ("Residual Score",      COL_RES_SCORE),
+    ("Owners",              COL_OWNERS),
+    ("Categories",          COL_CATEGORIES),
 ]
 
 # Brand colors
-COLOR_HEADER_BG   = "1F3864"   # Dark navy — main header rows
-COLOR_HEADER_FG   = "FFFFFF"   # White text on dark header
-COLOR_SUBHEADER   = "2E75B6"   # Medium blue — section subheaders
-COLOR_TABLE_HEAD  = "D6DCE4"   # Light grey-blue — table column headers
-COLOR_DASHBOARD_BG= "1F3864"   # Same navy for Dashboard title
+COLOR_HEADER_BG  = "1F3864"   # Dark navy — main header rows
+COLOR_HEADER_FG  = "FFFFFF"   # White text on dark background
+COLOR_SUBHEADER  = "2E75B6"   # Medium blue — section subheaders
+COLOR_TABLE_HEAD = "D6DCE4"   # Light grey-blue — table column headers
 
 # Sheet tab colors matching tier severity
 TAB_COLORS = {
@@ -239,9 +254,10 @@ def _draw_heatmap(
     start_row: int,
     label_col: int,
     grid_col_start: int,
-    mode: str,          # "inherent" or "residual"
+    mode: str,              # "inherent" or "residual"
     title: str,
     grid_size: int = DEFAULT_GRID_SIZE,
+    seq_map: Dict[int, int] = None,
 ):
     """
     Draw a single N×N risk heatmap block onto a worksheet.
@@ -253,19 +269,21 @@ def _draw_heatmap(
       +(N+2): "← Likelihood →" axis label
 
     Cell content: sequence numbers for risks landing in that cell.
-    When > 5 risks share a cell, show "N risks" to keep cells readable.
-    Risks whose impact/likelihood falls outside the grid are silently skipped
-    (they still appear in the risk details table below).
+    Numbers come from seq_map so they match the risk table rows below.
+    When > 5 risks share a cell, shows "N risks" to keep the cell readable.
+    Risks outside the grid range are counted and noted in the title.
     """
-    # Build levels lists dynamically from grid_size
+    if seq_map is None:
+        seq_map = _build_seq_map(risks)
+
     impact_levels     = list(range(grid_size, 0, -1))   # e.g. [4,3,2,1]
     likelihood_levels = list(range(1, grid_size + 1))   # e.g. [1,2,3,4]
     grid_col_end = grid_col_start + grid_size - 1
 
-    # Map (impact, likelihood) → list of risk sequence numbers in this cell
+    # Map (impact, likelihood) → sorted list of sequence numbers in that cell
     cell_risks: dict = {}
     skipped = 0
-    for i, risk in enumerate(risks, start=1):
+    for risk in risks:
         imp = risk.impact      if mode == "inherent" else risk.residual_impact
         lik = risk.likelihood  if mode == "inherent" else risk.residual_likelihood
         if imp is None or lik is None:
@@ -273,7 +291,7 @@ def _draw_heatmap(
         if imp < 1 or imp > grid_size or lik < 1 or lik > grid_size:
             skipped += 1
             continue
-        cell_risks.setdefault((imp, lik), []).append(i)
+        cell_risks.setdefault((imp, lik), []).append(seq_map[risk.id])
 
     # Row 0: Section title
     ws.merge_cells(
@@ -306,12 +324,11 @@ def _draw_heatmap(
             align=_center(), border=True,
         )
 
-    # Rows 2 … N+1: One row per impact level (highest impact at top)
+    # Rows 2 … N+1: One row per impact level (highest at top)
     for row_offset, impact_level in enumerate(impact_levels):
         data_row = start_row + 2 + row_offset
-        ws.row_dimensions[data_row].height = 65   # tall enough for multi-line content
+        ws.row_dimensions[data_row].height = 65
 
-        # Impact axis label
         _apply_cell(
             ws, data_row, label_col,
             value=_level_label_short(impact_level),
@@ -322,9 +339,8 @@ def _draw_heatmap(
         for col_offset, likelihood_level in enumerate(likelihood_levels):
             col = grid_col_start + col_offset
             cell_color = heatmap_cell_color(impact_level, likelihood_level)
-            seqs = cell_risks.get((impact_level, likelihood_level), [])
+            seqs = sorted(cell_risks.get((impact_level, likelihood_level), []))
 
-            # For clarity: show individual numbers for ≤5 risks, count for more
             if not seqs:
                 cell_text = ""
             elif len(seqs) <= 5:
@@ -360,43 +376,37 @@ def _draw_risk_table(
     ws: Worksheet,
     risks: List[Risk],
     start_row: int,
-    include_tenant_col: bool = False,
-    tenant_name: str = "",
+    seq_map: Dict[int, int] = None,
 ):
     """
-    Draw the detailed risk register table starting at start_row.
+    Draw the risk register table starting at start_row.
 
     Risks are grouped by severity tier (Very High → High → Moderate → Low →
     Unscored), sorted by score descending within each tier.
 
-    When include_tenant_col is True, a "Tenant" column is prepended at col 1
-    and all other columns shift right by one. Used for the All Risks sheet.
+    Sequence numbers come from seq_map so they always match the heatmap labels.
     """
-    offset = 1 if include_tenant_col else 0
+    if seq_map is None:
+        seq_map = _build_seq_map(risks)
 
     # Section title
     _merge_header(
-        ws, start_row, 1, TABLE_LAST_COL + offset,
+        ws, start_row, 1, TABLE_LAST_COL,
         "KEY RISKS AND MANAGEMENT ACTIVITIES",
         font_size=11,
     )
 
     # Column headers
     header_row = start_row + 1
-    if include_tenant_col:
-        _apply_cell(
-            ws, header_row, 1, "Tenant",
-            bold=True, bg_color=COLOR_TABLE_HEAD, border=True, align=_center(),
-        )
     for label, col in TABLE_HEADERS:
         _apply_cell(
-            ws, header_row, col + offset,
+            ws, header_row, col,
             value=label,
             bold=True, bg_color=COLOR_TABLE_HEAD,
             border=True, align=_center(),
         )
 
-    # Group and sort risks
+    # Group and sort risks by tier
     tiers = ["Very High", "High", "Moderate", "Low", "Unscored"]
     current_row = header_row + 1
 
@@ -409,43 +419,41 @@ def _draw_risk_table(
             continue
 
         # Tier header row
-        tier_bg = TIER_ROW_COLORS[tier]
         _merge_header(
-            ws, current_row, 1, TABLE_LAST_COL + offset,
+            ws, current_row, 1, TABLE_LAST_COL,
             f"{tier} Risk{'s' if tier != 'Unscored' else ''}",
-            bg_color=tier_bg,
+            bg_color=TIER_ROW_COLORS[tier],
             font_color="000000",
             font_size=10,
         )
         current_row += 1
 
-        for seq, risk in enumerate(tier_risks, start=1):
-            # Sequence number continues across the entire table
+        for risk in tier_risks:
+            seq = seq_map[risk.id]
             row = current_row
-            ws.row_dimensions[row].height = 75   # Tall rows for wrapped text
+            ws.row_dimensions[row].height = 75
 
-            if include_tenant_col:
-                _apply_cell(ws, row, 1, tenant_name, border=True, align=_center())
-
-            # Risk title (statement). Description goes in a cell note if long.
             full_statement = risk.title
             if risk.description:
                 full_statement += "\n\n" + risk.description
 
-            _apply_cell(ws, row, COL_SEQ + offset,       seq,                      border=True, align=_center())
-            _apply_cell(ws, row, COL_STATEMENT + offset, full_statement,           border=True, align=_left_wrap())
-            _apply_cell(ws, row, COL_IMPACT + offset,    risk.impact_label,        border=True, align=_center(),
-                        bg_color=TIER_COLORS.get(score_to_tier(risk.impact * risk.likelihood if risk.impact and risk.likelihood else None), None))
-            _apply_cell(ws, row, COL_LIKELIHOOD + offset,risk.likelihood_label,    border=True, align=_center())
-            _apply_cell(ws, row, COL_SCORE + offset,     risk.score,               border=True, align=_center())
-            _apply_cell(ws, row, COL_TREATMENT + offset, risk.treatment_label,     border=True, align=_center())
-            _apply_cell(ws, row, COL_DETAILS + offset,   risk.treatment_details,   border=True, align=_left_wrap())
-            _apply_cell(ws, row, COL_STATUS + offset,    risk.status_label,        border=True, align=_center())
-            _apply_cell(ws, row, COL_RES_IMPACT + offset,risk.residual_impact_label, border=True, align=_center())
-            _apply_cell(ws, row, COL_RES_LIKELY + offset,risk.residual_likelihood_label, border=True, align=_center())
-            _apply_cell(ws, row, COL_RES_SCORE + offset, risk.residual_score,      border=True, align=_center())
-            _apply_cell(ws, row, COL_OWNERS + offset,    ", ".join(risk.owners),   border=True, align=_center())
-            _apply_cell(ws, row, COL_CATEGORIES + offset,", ".join(risk.categories), border=True, align=_center())
+            score_tier_bg = TIER_COLORS.get(
+                score_to_tier(risk.impact * risk.likelihood if risk.impact and risk.likelihood else None)
+            )
+
+            _apply_cell(ws, row, COL_SEQ,       seq,                                border=True, align=_center())
+            _apply_cell(ws, row, COL_STATEMENT,  full_statement,                     border=True, align=_left_wrap())
+            _apply_cell(ws, row, COL_IMPACT,     risk.impact_label,                  border=True, align=_center(), bg_color=score_tier_bg)
+            _apply_cell(ws, row, COL_LIKELIHOOD, risk.likelihood_label,              border=True, align=_center())
+            _apply_cell(ws, row, COL_SCORE,      risk.score,                         border=True, align=_center())
+            _apply_cell(ws, row, COL_TREATMENT,  risk.treatment_label,               border=True, align=_center())
+            _apply_cell(ws, row, COL_DETAILS,    risk.treatment_details,             border=True, align=_left_wrap())
+            _apply_cell(ws, row, COL_STATUS,     risk.status_label,                  border=True, align=_center())
+            _apply_cell(ws, row, COL_RES_IMPACT, risk.residual_impact_label,         border=True, align=_center())
+            _apply_cell(ws, row, COL_RES_LIKELY, risk.residual_likelihood_label,     border=True, align=_center())
+            _apply_cell(ws, row, COL_RES_SCORE,  risk.residual_score,                border=True, align=_center())
+            _apply_cell(ws, row, COL_OWNERS,     ", ".join(risk.owners),             border=True, align=_center())
+            _apply_cell(ws, row, COL_CATEGORIES, ", ".join(risk.categories),         border=True, align=_center())
 
             current_row += 1
 
@@ -459,8 +467,7 @@ def _draw_risk_table(
 def _set_column_widths(ws: Worksheet, offset: int = 0):
     """Apply the standard column widths to a worksheet."""
     if offset:
-        # All Risks sheet has an extra Tenant col at position 1
-        ws.column_dimensions["A"].width = 22
+        ws.column_dimensions["A"].width = 22   # Tenant column on All Risks
     for col_idx, width in COLUMN_WIDTHS.items():
         col_letter = get_column_letter(col_idx + offset)
         ws.column_dimensions[col_letter].width = width
@@ -502,18 +509,17 @@ def _build_tenant_sheet(
       Rows 12–13 : Spacer
       Row  14+   : Risk details table
     """
-    # Sanitize sheet name (Excel max 31 chars, no special chars)
-    sheet_name = tenant.name[:31].replace("/", "-").replace("\\", "-").replace("?", "").replace("*", "").replace("[", "").replace("]", "")
+    sheet_name = (
+        tenant.name[:31]
+        .replace("/", "-").replace("\\", "-")
+        .replace("?", "").replace("*", "")
+        .replace("[", "").replace("]", "")
+    )
     ws = wb.create_sheet(title=sheet_name)
 
     _set_column_widths(ws)
-
-    # Tab color based on overall risk posture
     ws.sheet_properties.tabColor = TAB_COLORS.get(tenant.highest_tier, "A6A6A6")
 
-    # Freeze panes are set after heatmap/table layout is computed (see below)
-
-    # Header rows
     _build_sheet_header(
         ws,
         title="FIRSTSERVICE — ENTERPRISE RISK MANAGEMENT",
@@ -521,7 +527,7 @@ def _build_tenant_sheet(
         refreshed_at=refreshed_at,
         last_col=TABLE_LAST_COL,
     )
-    ws.row_dimensions[4].height = 8   # Spacer
+    ws.row_dimensions[4].height = 8
 
     risks = tenant.all_risks
 
@@ -535,16 +541,16 @@ def _build_tenant_sheet(
         )
         return ws
 
-    # Detect the actual grid scale from this tenant's data.
-    # Stays at 4 for standard FS tenants; grows for larger Drata configurations.
+    # Detect grid scale from actual data (stays 4 for standard FS tenants)
     size = _grid_size(risks)
+    heatmap_height = size + 3   # title + header + N grid rows + footer
 
-    # Heatmap block height = grid_size rows + 3 overhead rows (title, header, footer)
-    heatmap_height = size + 3
+    # Build the sequence map once. Both heatmap and table use the same map
+    # so that #N in the heatmap always refers to the same row in the table.
+    seq_map = _build_seq_map(risks)
 
-    # Inherent heatmap: label in col B (index 2), grid in cols C onward.
-    # Width = 1 (label col) + size (grid cols).
-    inherent_label_col = HEATMAP_INHERENT_COL        # col B = 2
+    # Inherent heatmap: impact labels in col B, grid in cols C onward
+    inherent_label_col  = HEATMAP_INHERENT_COL       # col B = 2
     inherent_grid_start = inherent_label_col + 1     # col C = 3
     inherent_end_col    = inherent_grid_start + size - 1
 
@@ -556,11 +562,11 @@ def _build_tenant_sheet(
         mode="inherent",
         title="INHERENT RISK",
         grid_size=size,
+        seq_map=seq_map,
     )
 
-    # Residual heatmap starts 2 columns after the inherent heatmap ends,
-    # so they never overlap regardless of grid scale.
-    residual_label_col = inherent_end_col + 2
+    # Residual heatmap: starts 2 cols after inherent ends so they never overlap
+    residual_label_col  = inherent_end_col + 2
     residual_grid_start = residual_label_col + 1
 
     has_residual = any(r.residual_impact is not None for r in risks)
@@ -573,6 +579,7 @@ def _build_tenant_sheet(
             mode="residual",
             title="RESIDUAL RISK",
             grid_size=size,
+            seq_map=seq_map,
         )
     else:
         # Placeholder when residual scores haven't been entered in Drata yet
@@ -583,27 +590,29 @@ def _build_tenant_sheet(
         )
         _apply_cell(
             ws, HEATMAP_START_ROW, residual_label_col,
-            value="RESIDUAL RISK\n\nResidual scores not yet entered in Drata.\nSet Residual Impact and Residual Likelihood on each risk to populate this view.",
+            value=(
+                "RESIDUAL RISK\n\n"
+                "Residual scores not yet entered in Drata.\n"
+                "Set Residual Impact and Residual Likelihood on each risk to populate this view."
+            ),
             bold=True, font_size=10, font_color="595959",
             bg_color="F2F2F2",
             align=Alignment(horizontal="center", vertical="center", wrap_text=True),
         )
 
-    # Dynamic spacer rows between heatmap block and risk table
+    # Spacer rows between heatmap block and risk table
     spacer_start = HEATMAP_START_ROW + heatmap_height + 1
     for r in range(spacer_start, spacer_start + 2):
         ws.row_dimensions[r].height = 8
 
-    # Risk details table starts after heatmap block + spacer rows
     table_start = HEATMAP_START_ROW + heatmap_height + 3
 
-    # Freeze: lock header rows and the seq# + statement columns so the user
-    # can scroll right through the wide table while keeping risk context visible.
-    # +2 = skip the section title row and column header row to land on first data row.
-    first_data_row = table_start + 2
+    # Freeze panes: lock header rows and seq/statement cols so the user can scroll
+    # right through the wide table while keeping risk context visible.
+    first_data_row = table_start + 2   # skip section title + column header rows
     ws.freeze_panes = f"{get_column_letter(COL_IMPACT)}{first_data_row}"
 
-    _draw_risk_table(ws, risks, start_row=table_start)
+    _draw_risk_table(ws, risks, start_row=table_start, seq_map=seq_map)
 
     return ws
 
@@ -616,7 +625,7 @@ def _build_dashboard_sheet(
     """
     Build the Dashboard overview sheet — the first sheet in the workbook.
 
-    Shows one row per tenant with summary risk counts and a link to the
+    Shows one row per tenant with summary risk counts and a hyperlink to the
     tenant's detail sheet. Tenants with fetch errors are shown in red.
     """
     ws = wb.create_sheet(title="Dashboard", index=0)
@@ -631,18 +640,18 @@ def _build_dashboard_sheet(
     )
     ws.row_dimensions[4].height = 8
 
-    # Summary table header row
+    # Column definitions: (header label, col span)
     DASH_HEADERS = [
-        ("Tenant",       6),
-        ("Total Risks",  3),
-        ("Very High",    3),
-        ("High",         2),
-        ("Moderate",     2),
-        ("Low",          2),
-        ("Unscored",     2),
+        ("Tenant",      6),
+        ("Total Risks", 3),
+        ("Very High",   3),
+        ("High",        2),
+        ("Moderate",    2),
+        ("Low",         2),
+        ("Unscored",    2),
     ]
 
-    # Build column positions for dashboard table dynamically
+    # Compute absolute col positions for each header
     dash_col_positions = []
     cur_col = 1
     for label, span in DASH_HEADERS:
@@ -652,39 +661,22 @@ def _build_dashboard_sheet(
     header_row = 5
     ws.row_dimensions[header_row].height = 20
     for label, col_start, col_end in dash_col_positions:
-        if col_start == col_end:
-            _apply_cell(
-                ws, header_row, col_start, label,
-                bold=True, bg_color=COLOR_TABLE_HEAD, border=True, align=_center(),
-            )
-        else:
+        if col_start != col_end:
             ws.merge_cells(
                 start_row=header_row, start_column=col_start,
                 end_row=header_row, end_column=col_end,
             )
-            _apply_cell(
-                ws, header_row, col_start, label,
-                bold=True, bg_color=COLOR_TABLE_HEAD, border=True, align=_center(),
-            )
+        _apply_cell(
+            ws, header_row, col_start, label,
+            bold=True, bg_color=COLOR_TABLE_HEAD, border=True, align=_center(),
+        )
 
     # One data row per tenant
     for row_offset, tenant in enumerate(tenants):
         data_row = header_row + 1 + row_offset
         ws.row_dimensions[data_row].height = 18
 
-        counts = tenant.risk_counts
-        row_data = [
-            (tenant.name,           1),   # tenant name col start
-            (counts["Total"],       None),
-            (counts["Very High"],   None),
-            (counts["High"],        None),
-            (counts["Moderate"],    None),
-            (counts["Low"],         None),
-            (counts["Unscored"],    None),
-        ]
-
         if tenant.error:
-            # Error row — show the error message in red spanning all cols
             err_col_start = dash_col_positions[0][1]
             err_col_end   = dash_col_positions[-1][2]
             ws.merge_cells(
@@ -699,8 +691,13 @@ def _build_dashboard_sheet(
             )
             continue
 
-        # Tenant name with hyperlink to its detail sheet
-        sheet_name = tenant.name[:31].replace("/", "-").replace("\\", "-").replace("?", "").replace("*", "").replace("[", "").replace("]", "")
+        # Tenant name cell with hyperlink to its detail sheet
+        sheet_name = (
+            tenant.name[:31]
+            .replace("/", "-").replace("\\", "-")
+            .replace("?", "").replace("*", "")
+            .replace("[", "").replace("]", "")
+        )
         tenant_col_start = dash_col_positions[0][1]
         tenant_col_end   = dash_col_positions[0][2]
         if tenant_col_start != tenant_col_end:
@@ -710,19 +707,23 @@ def _build_dashboard_sheet(
             )
         cell = ws.cell(row=data_row, column=tenant_col_start, value=tenant.name)
         cell.hyperlink = f"#{sheet_name}!A1"
-        cell.font = Font(
-            name=FONT_NAME, bold=True, size=10,
-            color="1F3864", underline="single",
-        )
+        cell.font = Font(name=FONT_NAME, bold=True, size=10, color="1F3864", underline="single")
         cell.alignment = _left_wrap()
         cell.border = _thin_border()
 
-        # Tier count cells — color-coded background
-        tier_colors_order = [None, None, "FFCCCC", "FFE0B3", "FFFACD", "D6EFD8", "F2F2F2"]
-        for field_idx, (val, _) in enumerate(row_data[1:], start=1):
+        # Risk count cells — colour-coded background per tier
+        counts = tenant.risk_counts
+        count_data = [
+            (counts["Total"],     None),
+            (counts["Very High"], "FFCCCC"),
+            (counts["High"],      "FFE0B3"),
+            (counts["Moderate"],  "FFFACD"),
+            (counts["Low"],       "D6EFD8"),
+            (counts["Unscored"],  "F2F2F2"),
+        ]
+        for field_idx, (val, bg) in enumerate(count_data, start=1):
             col_start = dash_col_positions[field_idx][1]
             col_end   = dash_col_positions[field_idx][2]
-            bg = tier_colors_order[field_idx] if field_idx < len(tier_colors_order) else None
             if col_start != col_end:
                 ws.merge_cells(
                     start_row=data_row, start_column=col_start,
@@ -730,7 +731,7 @@ def _build_dashboard_sheet(
                 )
             _apply_cell(
                 ws, data_row, col_start, val,
-                bold=(val > 0 if isinstance(val, int) else False),
+                bold=(isinstance(val, int) and val > 0),
                 font_size=10,
                 bg_color=bg if (isinstance(val, int) and val > 0) else None,
                 border=True, align=_center(),
@@ -744,8 +745,10 @@ def _build_dashboard_sheet(
     )
     _apply_cell(
         ws, footer_row, 1,
-        value="Click a tenant name to jump to its detail sheet.  "
-              "See 'All Risks' sheet for a consolidated filterable view.",
+        value=(
+            "Click a tenant name to jump to its detail sheet.  "
+            "See 'All Risks' sheet for a consolidated filterable view."
+        ),
         bold=False, font_size=9, font_color="595959",
         align=Alignment(horizontal="left", vertical="center"),
     )
@@ -757,48 +760,99 @@ def _build_all_risks_sheet(
     refreshed_at: str,
 ):
     """
-    Build the consolidated 'All Risks' sheet — every risk from every tenant
-    in a single filterable table, with a 'Tenant' column prepended.
+    Build the 'All Risks' consolidated sheet as a flat, filterable table.
+
+    Each row is one risk. The Tenant column allows filtering by brand.
+    Auto-filter is enabled so GRC can filter by tenant, tier, treatment plan, etc.
+    Sequence numbers (#) are per-tenant and match the heatmap on that tenant's sheet.
     """
     ws = wb.create_sheet(title="All Risks")
-    _set_column_widths(ws, offset=1)   # Tenant col shifts everything right by 1
+    last_col = TABLE_LAST_COL + 1   # Tenant column prepended
 
+    _set_column_widths(ws, offset=1)
     _build_sheet_header(
         ws,
         title="FIRSTSERVICE — ENTERPRISE RISK MANAGEMENT",
-        subtitle="All Risks  ·  Consolidated View",
+        subtitle="All Risks  ·  Consolidated Filterable View",
         refreshed_at=refreshed_at,
-        last_col=TABLE_LAST_COL + 1,
+        last_col=last_col,
     )
     ws.row_dimensions[4].height = 8
 
-    # Flatten all risks from all successful tenants into one table
-    current_row = 5
-    all_risks_exist = False
+    # Column header row
+    header_row = 5
+    ws.row_dimensions[header_row].height = 20
+    _apply_cell(
+        ws, header_row, 1, "Tenant",
+        bold=True, bg_color=COLOR_TABLE_HEAD, border=True, align=_center(),
+    )
+    for label, col in TABLE_HEADERS:
+        _apply_cell(
+            ws, header_row, col + 1, label,
+            bold=True, bg_color=COLOR_TABLE_HEAD, border=True, align=_center(),
+        )
 
+    # Collect all risks from successful tenants
+    all_entries = []   # (tenant_name, risk, seq_num)
     for tenant in tenants:
         if tenant.error or not tenant.all_risks:
             continue
-        all_risks_exist = True
-        current_row = _draw_risk_table(
-            ws,
-            tenant.all_risks,
-            start_row=current_row,
-            include_tenant_col=True,
-            tenant_name=tenant.name,
-        )
-        current_row += 1   # Spacer between tenants
+        seq_map = _build_seq_map(tenant.all_risks)
+        for risk in tenant.all_risks:
+            all_entries.append((tenant.name, risk, seq_map[risk.id]))
 
-    if not all_risks_exist:
-        ws.merge_cells(start_row=5, start_column=1, end_row=5, end_column=TABLE_LAST_COL + 1)
+    if not all_entries:
+        ws.merge_cells(start_row=6, start_column=1, end_row=6, end_column=last_col)
         _apply_cell(
-            ws, 5, 1,
+            ws, 6, 1,
             value="No risk data available. Check that tokens are valid and risks have been entered in Drata.",
             bold=False, font_size=10, font_color="595959",
             align=Alignment(horizontal="center", vertical="center"),
         )
+        return
 
-    ws.freeze_panes = "B6"
+    # Sort: tenant name → tier → score desc → title
+    all_entries.sort(
+        key=lambda e: (
+            e[0],
+            _TIER_ORDER.get(e[1].severity_tier, 99),
+            -(e[1].score or 0),
+            e[1].title,
+        )
+    )
+
+    data_row = header_row + 1
+    for tenant_name, risk, seq in all_entries:
+        ws.row_dimensions[data_row].height = 55
+
+        full_statement = risk.title
+        if risk.description:
+            full_statement += "\n\n" + risk.description
+
+        score_tier_bg = TIER_COLORS.get(
+            score_to_tier(risk.impact * risk.likelihood if risk.impact and risk.likelihood else None)
+        )
+
+        _apply_cell(ws, data_row, 1,              tenant_name,                        border=True, align=_center())
+        _apply_cell(ws, data_row, COL_SEQ + 1,    seq,                                border=True, align=_center())
+        _apply_cell(ws, data_row, COL_STATEMENT + 1, full_statement,                  border=True, align=_left_wrap())
+        _apply_cell(ws, data_row, COL_IMPACT + 1,    risk.impact_label,               border=True, align=_center(), bg_color=score_tier_bg)
+        _apply_cell(ws, data_row, COL_LIKELIHOOD + 1,risk.likelihood_label,           border=True, align=_center())
+        _apply_cell(ws, data_row, COL_SCORE + 1,     risk.score,                      border=True, align=_center())
+        _apply_cell(ws, data_row, COL_TREATMENT + 1, risk.treatment_label,            border=True, align=_center())
+        _apply_cell(ws, data_row, COL_DETAILS + 1,   risk.treatment_details,          border=True, align=_left_wrap())
+        _apply_cell(ws, data_row, COL_STATUS + 1,    risk.status_label,               border=True, align=_center())
+        _apply_cell(ws, data_row, COL_RES_IMPACT + 1,risk.residual_impact_label,      border=True, align=_center())
+        _apply_cell(ws, data_row, COL_RES_LIKELY + 1,risk.residual_likelihood_label,  border=True, align=_center())
+        _apply_cell(ws, data_row, COL_RES_SCORE + 1, risk.residual_score,             border=True, align=_center())
+        _apply_cell(ws, data_row, COL_OWNERS + 1,    ", ".join(risk.owners),          border=True, align=_center())
+        _apply_cell(ws, data_row, COL_CATEGORIES + 1,", ".join(risk.categories),      border=True, align=_center())
+
+        data_row += 1
+
+    # Auto-filter: lets GRC filter by tenant, tier, treatment plan, status, etc.
+    ws.auto_filter.ref = f"A{header_row}:{get_column_letter(last_col)}{data_row - 1}"
+    ws.freeze_panes = f"B{header_row + 1}"
 
 
 # ---------------------------------------------------------------------------
@@ -828,10 +882,9 @@ class ExcelBuilder:
             refreshed_at = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         wb = Workbook()
-        # Remove the default empty sheet that openpyxl creates
-        wb.remove(wb.active)
+        wb.remove(wb.active)   # Remove the default empty sheet openpyxl creates
 
-        # Sheet order: Dashboard first, then one per tenant, then All Risks last
+        # Sheet order: Dashboard first, one per tenant, All Risks last
         _build_dashboard_sheet(wb, tenants, refreshed_at)
 
         for tenant in tenants:
