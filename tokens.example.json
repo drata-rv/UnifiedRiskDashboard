@@ -1,0 +1,20 @@
+{
+  "_comment": "Copy this file to tokens.json and fill in real API tokens. tokens.json is gitignored.",
+  "tenants": [
+    {
+      "name": "California Closets",
+      "token": "PASTE_BEARER_TOKEN_HERE",
+      "region": "us"
+    },
+    {
+      "name": "Paul Davis Restoration",
+      "token": "PASTE_BEARER_TOKEN_HERE",
+      "region": "us"
+    },
+    {
+      "name": "FirstService Residential",
+      "token": "PASTE_BEARER_TOKEN_HERE",
+      "region": "us"
+    }
+  ]
+}
