@@ -38,6 +38,7 @@ from models import (
     TenantData,
     heatmap_cell_color,
     score_to_tier,
+    risk_row_hash,
 )
 
 # ---------------------------------------------------------------------------
@@ -120,6 +121,12 @@ COL_CATEGORIES   = 13  # M  — categories
 
 TABLE_LAST_COL = COL_CATEGORIES
 
+# Hidden metadata columns on the All Risks sheet (not visible to users).
+# Written at generation time; read by push_changes.py to route write-backs.
+_META_RISK_ID     = TABLE_LAST_COL + 2   # col O (15) — Drata numeric risk id
+_META_REGISTER_ID = TABLE_LAST_COL + 3   # col P (16) — Drata numeric register id
+_META_HASH        = TABLE_LAST_COL + 4   # col Q (17) — hash of editable fields
+
 # Column widths (chars). Wide cols serve the table; heatmap adapts.
 COLUMN_WIDTHS = {
     COL_SEQ:        5,
@@ -155,10 +162,10 @@ TABLE_HEADERS = [
 ]
 
 # Brand colors
-COLOR_HEADER_BG  = "1F3864"   # Dark navy — main header rows
+COLOR_HEADER_BG  = "404040"   # Dark charcoal — main header rows
 COLOR_HEADER_FG  = "FFFFFF"   # White text on dark background
-COLOR_SUBHEADER  = "2E75B6"   # Medium blue — section subheaders
-COLOR_TABLE_HEAD = "D6DCE4"   # Light grey-blue — table column headers
+COLOR_SUBHEADER  = "737373"   # Medium gray — section subheaders
+COLOR_TABLE_HEAD = "D9D9D9"   # Light gray — table column headers
 
 # Sheet tab colors matching tier severity
 TAB_COLORS = {
@@ -607,10 +614,9 @@ def _build_tenant_sheet(
 
     table_start = HEATMAP_START_ROW + heatmap_height + 3
 
-    # Freeze panes: lock header rows and seq/statement cols so the user can scroll
-    # right through the wide table while keeping risk context visible.
-    first_data_row = table_start + 2   # skip section title + column header rows
-    ws.freeze_panes = f"{get_column_letter(COL_IMPACT)}{first_data_row}"
+    # Freeze only the 3-row title block + cols A-B (seq# and statement).
+    # Heatmap and table column headers scroll freely — avoids locking 16+ rows.
+    ws.freeze_panes = "C4"
 
     _draw_risk_table(ws, risks, start_row=table_start, seq_map=seq_map)
 
@@ -707,7 +713,7 @@ def _build_dashboard_sheet(
             )
         cell = ws.cell(row=data_row, column=tenant_col_start, value=tenant.name)
         cell.hyperlink = f"#{sheet_name}!A1"
-        cell.font = Font(name=FONT_NAME, bold=True, size=10, color="1F3864", underline="single")
+        cell.font = Font(name=FONT_NAME, bold=True, size=10, color="404040", underline="single")
         cell.alignment = _left_wrap()
         cell.border = _thin_border()
 
@@ -779,7 +785,7 @@ def _build_all_risks_sheet(
     )
     ws.row_dimensions[4].height = 8
 
-    # Column header row
+    # Column header row — visible headers + hidden metadata headers
     header_row = 5
     ws.row_dimensions[header_row].height = 20
     _apply_cell(
@@ -791,15 +797,22 @@ def _build_all_risks_sheet(
             ws, header_row, col + 1, label,
             bold=True, bg_color=COLOR_TABLE_HEAD, border=True, align=_center(),
         )
+    for col, label in [
+        (_META_RISK_ID,     "_drata_risk_id"),
+        (_META_REGISTER_ID, "_drata_register_id"),
+        (_META_HASH,        "_orig_hash"),
+    ]:
+        _apply_cell(ws, header_row, col, label, bold=True, bg_color=COLOR_TABLE_HEAD, align=_center())
 
-    # Collect all risks from successful tenants
-    all_entries = []   # (tenant_name, risk, seq_num)
+    # Collect all risks — iterate registers directly to capture register.id per risk
+    all_entries = []   # (tenant_name, register_id, risk, seq_num)
     for tenant in tenants:
-        if tenant.error or not tenant.all_risks:
+        if tenant.error or not tenant.registers:
             continue
         seq_map = _build_seq_map(tenant.all_risks)
-        for risk in tenant.all_risks:
-            all_entries.append((tenant.name, risk, seq_map[risk.id]))
+        for register in tenant.registers:
+            for risk in register.risks:
+                all_entries.append((tenant.name, register.id, risk, seq_map[risk.id]))
 
     if not all_entries:
         ws.merge_cells(start_row=6, start_column=1, end_row=6, end_column=last_col)
@@ -815,14 +828,14 @@ def _build_all_risks_sheet(
     all_entries.sort(
         key=lambda e: (
             e[0],
-            _TIER_ORDER.get(e[1].severity_tier, 99),
-            -(e[1].score or 0),
-            e[1].title,
+            _TIER_ORDER.get(e[2].severity_tier, 99),
+            -(e[2].score or 0),
+            e[2].title,
         )
     )
 
     data_row = header_row + 1
-    for tenant_name, risk, seq in all_entries:
+    for tenant_name, register_id, risk, seq in all_entries:
         ws.row_dimensions[data_row].height = 55
 
         full_statement = risk.title
@@ -848,11 +861,28 @@ def _build_all_risks_sheet(
         _apply_cell(ws, data_row, COL_OWNERS + 1,    ", ".join(risk.owners),          border=True, align=_center())
         _apply_cell(ws, data_row, COL_CATEGORIES + 1,", ".join(risk.categories),      border=True, align=_center())
 
+        # Hidden metadata — not visible but read by push_changes.py
+        _apply_cell(ws, data_row, _META_RISK_ID,     risk.id,     align=_center())
+        _apply_cell(ws, data_row, _META_REGISTER_ID, register_id, align=_center())
+        _apply_cell(ws, data_row, _META_HASH,
+            risk_row_hash(
+                risk.treatment_plan, risk.treatment_details, risk.status,
+                risk.impact, risk.likelihood, risk.residual_impact, risk.residual_likelihood,
+            ),
+            align=_center(),
+        )
+
         data_row += 1
 
-    # Auto-filter: lets GRC filter by tenant, tier, treatment plan, status, etc.
+    # Auto-filter on visible columns only (A:N) — hidden cols excluded
     ws.auto_filter.ref = f"A{header_row}:{get_column_letter(last_col)}{data_row - 1}"
     ws.freeze_panes = f"B{header_row + 1}"
+
+    # Hide metadata columns — data is present but not shown to users
+    for col_idx in (_META_RISK_ID, _META_REGISTER_ID, _META_HASH):
+        col_letter = get_column_letter(col_idx)
+        ws.column_dimensions[col_letter].hidden = True
+        ws.column_dimensions[col_letter].width = 18
 
 
 # ---------------------------------------------------------------------------

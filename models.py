@@ -23,6 +23,7 @@ LEVEL_LABELS = {
     4: "Very High",
     5: "Critical",
 }
+LABEL_TO_LEVEL = {v: k for k, v in LEVEL_LABELS.items()}
 
 # Drata treatmentPlan enum values.
 # NOTE: Drata uses MITIGATE (not REDUCE) and TRANSFER (not SHARE).
@@ -34,6 +35,7 @@ TREATMENT_LABELS = {
     "ACCEPT":    "Accept",
     "UNTREATED": "Untreated",
 }
+LABEL_TO_TREATMENT = {v: k for k, v in TREATMENT_LABELS.items()}
 
 # Drata status enum values for a Risk.
 STATUS_LABELS = {
@@ -41,6 +43,7 @@ STATUS_LABELS = {
     "ARCHIVED": "Archived",
     "CLOSED":   "Closed",
 }
+LABEL_TO_STATUS = {v: k for k, v in STATUS_LABELS.items()}
 
 # Score thresholds for severity tier grouping (inherent score = impact × likelihood).
 # Derived from the customer's Excel draft (California Closets ERM, 2026):
@@ -93,6 +96,38 @@ def level_label(level: Optional[int]) -> str:
     if level is None:
         return "—"
     return LEVEL_LABELS.get(level, str(level))
+
+
+def parse_level(cell_value) -> Optional[int]:
+    """Parse an Excel cell value (display label or raw number) back to a Drata integer level."""
+    if cell_value is None:
+        return None
+    s = str(cell_value).strip()
+    if s in ("—", "", "None"):
+        return None
+    if s in LABEL_TO_LEVEL:
+        return LABEL_TO_LEVEL[s]
+    try:
+        return int(float(s))
+    except (ValueError, TypeError):
+        return None
+
+
+def risk_row_hash(
+    treatment_plan, treatment_details, status,
+    impact, likelihood, residual_impact, residual_likelihood,
+) -> str:
+    """
+    Stable 12-char hash of the 7 editable fields.
+    Stored in the Excel at generation time; recomputed at sync time to detect changes.
+    Both sides must use raw API values (enums + integers), not display labels.
+    """
+    import hashlib
+    parts = "|".join(str(x if x is not None else "") for x in [
+        treatment_plan, treatment_details, status,
+        impact, likelihood, residual_impact, residual_likelihood,
+    ])
+    return hashlib.sha1(parts.encode()).hexdigest()[:12]
 
 
 def heatmap_cell_color(impact: Optional[int], likelihood: Optional[int]) -> str:
