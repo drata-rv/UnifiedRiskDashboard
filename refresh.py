@@ -6,6 +6,7 @@ Usage:
     python refresh.py --output my.xlsx             # custom output path
     python refresh.py --dry-run                    # validate tokens & connectivity only
     python refresh.py --verbose                    # show per-tenant API call details
+    python refresh.py --interactive                # rich terminal UI (demo mode)
     python refresh.py --azure                      # fetch tokens from Azure Key Vault
     python refresh.py --azure --tokens my.json     # custom Azure manifest path
 
@@ -117,6 +118,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Show detailed per-API-call logging",
     )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Rich terminal UI with live progress (demo mode)",
+    )
     return parser.parse_args()
 
 
@@ -131,6 +137,11 @@ def main():
 
     tokens_path = Path(args.tokens)
     tenant_configs = load_tokens(tokens_path, azure=args.azure)
+
+    if args.interactive:
+        from interactive import run_interactive
+        run_interactive(args, tenant_configs, fetch_tenant)
+        return
 
     logger.info("Loaded %d tenant(s) from %s", len(tenant_configs), tokens_path)
 
