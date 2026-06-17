@@ -36,7 +36,6 @@ from models import (
     LABEL_TO_STATUS,
     LABEL_TO_TREATMENT,
     parse_level,
-    risk_row_hash,
 )
 
 REGION_URLS = {
@@ -188,8 +187,8 @@ def push_changes(input_path: str, tokens_path: str, dry_run: bool = False, azure
     headers = _scan_headers(ws)
 
     required_cols = [
-        "Tenant", "_drata_risk_id", "_drata_register_id", "_orig_hash",
-        "Impact", "Likelihood", "Treatment Plan", "Treatment Details",
+        "Tenant", "_drata_risk_id", "_drata_register_id",
+        "Sync", "Impact", "Likelihood", "Treatment Plan", "Treatment Details",
         "Status", "Residual Impact", "Residual Likelihood",
     ]
     missing = [h for h in required_cols if h not in headers]
@@ -203,7 +202,7 @@ def push_changes(input_path: str, tokens_path: str, dry_run: bool = False, azure
 
     C = headers  # column index lookup: C["Impact"] → int
 
-    pushed, unchanged, skipped, errors = 0, 0, 0, 0
+    pushed, not_queued, skipped, errors = 0, 0, 0, 0
     warned_tenants = set()  # type: ignore
 
     for row in range(HEADER_ROW + 1, ws.max_row + 1):
@@ -211,11 +210,15 @@ def push_changes(input_path: str, tokens_path: str, dry_run: bool = False, azure
         if not tenant_name:
             continue  # blank row at end of data
 
+        # Only process rows the user has explicitly flagged for sync
+        if not _read_label(ws, row, C["Sync"]):
+            not_queued += 1
+            continue
+
         risk_id     = ws.cell(row=row, column=C["_drata_risk_id"]).value
         register_id = ws.cell(row=row, column=C["_drata_register_id"]).value
-        orig_hash   = ws.cell(row=row, column=C["_orig_hash"]).value
 
-        if not all([risk_id, register_id, orig_hash]):
+        if not all([risk_id, register_id]):
             log.warning(
                 "Row %d (%s): missing metadata — skipping. "
                 "Regenerate the xlsx with the latest refresh.py.",
@@ -233,22 +236,7 @@ def push_changes(input_path: str, tokens_path: str, dry_run: bool = False, azure
         res_impact_label     = _read_label(ws, row, C["Residual Impact"])
         res_likelihood_label = _read_label(ws, row, C["Residual Likelihood"])
 
-        # Recompute hash using API values (same form as at generation time)
-        current_hash = risk_row_hash(
-            LABEL_TO_TREATMENT.get(treatment_label) if treatment_label else None,
-            treatment_details or None,
-            LABEL_TO_STATUS.get(status_label) if status_label else None,
-            parse_level(impact_label),
-            parse_level(likelihood_label),
-            parse_level(res_impact_label),
-            parse_level(res_likelihood_label),
-        )
-
-        if current_hash == orig_hash:
-            unchanged += 1
-            continue
-
-        # Row was edited — look up tenant token
+        # Look up tenant token
         if tenant_name not in tenant_tokens:
             if tenant_name not in warned_tenants:
                 log.warning("No token configured for tenant %r — skipping all its rows", tenant_name)
@@ -282,17 +270,17 @@ def push_changes(input_path: str, tokens_path: str, dry_run: bool = False, azure
         else:
             errors += 1
 
-    total_scanned = pushed + unchanged + skipped + errors
+    total_scanned = pushed + not_queued + skipped + errors
     label = "DRY-RUN " if dry_run else ""
     print(f"\n{label}Sync complete — {total_scanned} rows scanned")
-    print(f"  Pushed (changed)  : {pushed}")
-    print(f"  Unchanged         : {unchanged}")
-    print(f"  Skipped           : {skipped}")
-    print(f"  Errors            : {errors}")
+    print(f"  Synced to Drata          : {pushed}")
+    print(f"  Not queued (no Sync flag): {not_queued}")
+    print(f"  Skipped                  : {skipped}")
+    print(f"  Errors                   : {errors}")
     if dry_run:
         print("\n  No changes were written to Drata (--dry-run mode).")
     else:
-        print("\n  Run refresh.py to regenerate the xlsx with updated hashes.")
+        print("\n  Run refresh.py to regenerate the xlsx with fresh hashes and blank Sync flags.")
 
     if errors:
         sys.exit(1)

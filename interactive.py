@@ -3,6 +3,8 @@ interactive.py — Rich terminal UI for refresh.py's --interactive / demo mode.
 
 Drives the same fetch and build logic as the standard flow but wraps it in
 a structured, colored terminal presentation suitable for live demos.
+After the initial run the script stays alive and presents a menu so the
+operator can refresh data or push edits without restarting.
 """
 
 import logging
@@ -13,36 +15,29 @@ from typing import Callable, List
 from rich.align import Align
 from rich.console import Console
 from rich.panel import Panel
+from rich.prompt import Confirm, Prompt
 from rich.text import Text
 
 console = Console()
 
 
-def _subtitle(tenant_configs: List[dict]) -> str:
+def _print_banner(tenant_configs: List[dict]) -> None:
     if len(tenant_configs) <= 4:
-        return "  ·  ".join(t["name"] for t in tenant_configs)
-    return f"{len(tenant_configs)} tenants configured"
+        subtitle = "  ·  ".join(t["name"] for t in tenant_configs)
+    else:
+        subtitle = f"{len(tenant_configs)} tenants configured"
 
-
-def run_interactive(args, tenant_configs: List[dict], fetch_fn: Callable) -> None:
-    """
-    Full interactive (demo) flow for refresh.py.
-    Replaces standard logging with structured rich output.
-    Calls sys.exit(1) on failure; returns normally on success.
-    """
-    # Suppress standard logger — rich owns all output in this mode
-    logging.getLogger().setLevel(logging.CRITICAL)
-
-    # ── Banner ────────────────────────────────────────────────────
     body = Text(justify="center")
     body.append("UNIFIED RISK DASHBOARD\n", style="bold white")
-    body.append(_subtitle(tenant_configs), style="dim white")
+    body.append(subtitle, style="dim white")
 
     console.print()
     console.print(Panel(Align.center(body), padding=(1, 6), border_style="bright_blue"))
     console.print()
 
-    # ── Fetch phase ───────────────────────────────────────────────
+
+def _do_fetch_and_build(args, tenant_configs: List[dict], fetch_fn: Callable) -> list:
+    """Run one fetch + build cycle. Returns the tenant_data list."""
     console.rule("[dim]Connecting to Drata[/dim]", style="dim")
     console.print()
 
@@ -69,15 +64,8 @@ def run_interactive(args, tenant_configs: List[dict], fetch_fn: Callable) -> Non
     if args.dry_run:
         console.rule("[yellow]Dry run — no file written[/yellow]", style="yellow")
         console.print()
-        failed = [t for t in tenant_data if t.error]
-        if failed:
-            for t in failed:
-                console.print(f"  [red]✗[/red]  {t.name}: {t.error}")
-            console.print()
-            sys.exit(1)
-        return
+        return tenant_data
 
-    # ── Build phase ───────────────────────────────────────────────
     from excel_builder import ExcelBuilder
 
     console.rule("[dim]Building workbook[/dim]", style="dim")
@@ -92,7 +80,6 @@ def run_interactive(args, tenant_configs: List[dict], fetch_fn: Callable) -> Non
     console.print("  [green]✓[/green]  Formatting applied")
     console.print()
 
-    # ── Completion panel ──────────────────────────────────────────
     success     = [t for t in tenant_data if not t.error]
     failed      = [t for t in tenant_data if t.error]
     total_risks = sum(len(t.all_risks)  for t in success)
@@ -117,4 +104,71 @@ def run_interactive(args, tenant_configs: List[dict], fetch_fn: Callable) -> Non
         for t in failed:
             console.print(f"  [red]✗[/red]  {t.name}: {t.error}")
         console.print()
-        sys.exit(1)
+
+    return tenant_data
+
+
+def _push_interactive(args) -> None:
+    """Handle the push-changes flow from the interactive menu."""
+    from push_changes import push_changes
+
+    console.print()
+    dry_run = Confirm.ask("  Preview changes before pushing?", default=True)
+    console.print()
+
+    try:
+        push_changes(
+            input_path=args.output,
+            tokens_path=args.tokens,
+            dry_run=dry_run,
+            azure=args.azure,
+        )
+    except SystemExit:
+        pass  # push_changes exits with 1 on errors — don't kill the interactive session
+
+    if dry_run:
+        console.print()
+        if Confirm.ask("  Push these changes to Drata?", default=False):
+            console.print()
+            try:
+                push_changes(
+                    input_path=args.output,
+                    tokens_path=args.tokens,
+                    dry_run=False,
+                    azure=args.azure,
+                )
+            except SystemExit:
+                pass
+
+
+def _show_menu() -> int:
+    console.print()
+    console.print("  [dim]What would you like to do next?[/dim]")
+    console.print()
+    console.print("  [white][[1]][/white]  Pull latest risks from Drata")
+    console.print("  [white][[2]][/white]  Sync marked changes to Drata")
+    console.print("  [white][[3]][/white]  Exit")
+    console.print()
+    return int(Prompt.ask("  →", choices=["1", "2", "3"], default="3"))
+
+
+def run_interactive(args, tenant_configs: List[dict], fetch_fn: Callable) -> None:
+    """
+    Full interactive (demo) flow for refresh.py.
+    Replaces standard logging with structured rich output and stays alive
+    after the initial run so the operator can refresh or push without restarting.
+    """
+    logging.getLogger().setLevel(logging.CRITICAL)
+
+    _print_banner(tenant_configs)
+    _do_fetch_and_build(args, tenant_configs, fetch_fn)
+
+    while True:
+        choice = _show_menu()
+        if choice == 1:
+            _do_fetch_and_build(args, tenant_configs, fetch_fn)
+        elif choice == 2:
+            _push_interactive(args)
+        else:
+            console.print()
+            break

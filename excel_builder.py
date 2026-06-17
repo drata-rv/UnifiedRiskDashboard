@@ -29,6 +29,7 @@ from openpyxl.styles import (
     Side,
 )
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.worksheet import Worksheet
 
 from models import (
@@ -121,11 +122,13 @@ COL_CATEGORIES   = 13  # M  — categories
 
 TABLE_LAST_COL = COL_CATEGORIES
 
-# Hidden metadata columns on the All Risks sheet (not visible to users).
-# Written at generation time; read by push_changes.py to route write-backs.
-_META_RISK_ID     = TABLE_LAST_COL + 2   # col O (15) — Drata numeric risk id
-_META_REGISTER_ID = TABLE_LAST_COL + 3   # col P (16) — Drata numeric register id
-_META_HASH        = TABLE_LAST_COL + 4   # col Q (17) — hash of editable fields
+# All Risks sheet extra columns (absolute positions; +1 Tenant offset already included).
+# _ALL_RISKS_SYNC_COL is visible — user marks "Sync" here to queue a row for push-back.
+# Metadata columns are hidden; written at generation time and read by push_changes.py.
+_ALL_RISKS_SYNC_COL = TABLE_LAST_COL + 2   # col O (15) — "Sync" flag (visible)
+_META_RISK_ID       = TABLE_LAST_COL + 3   # col P (16) — Drata numeric risk id
+_META_REGISTER_ID   = TABLE_LAST_COL + 4   # col Q (17) — Drata numeric register id
+_META_HASH          = TABLE_LAST_COL + 5   # col R (18) — hash of editable fields at generation time
 
 # Column widths (chars). Wide cols serve the table; heatmap adapts.
 COLUMN_WIDTHS = {
@@ -773,9 +776,10 @@ def _build_all_risks_sheet(
     Sequence numbers (#) are per-tenant and match the heatmap on that tenant's sheet.
     """
     ws = wb.create_sheet(title="All Risks")
-    last_col = TABLE_LAST_COL + 1   # Tenant column prepended
+    last_col = _ALL_RISKS_SYNC_COL   # Tenant prepended + Sync at end of visible cols
 
     _set_column_widths(ws, offset=1)
+    ws.column_dimensions[get_column_letter(_ALL_RISKS_SYNC_COL)].width = 8
     _build_sheet_header(
         ws,
         title="FIRSTSERVICE — ENTERPRISE RISK MANAGEMENT",
@@ -797,6 +801,10 @@ def _build_all_risks_sheet(
             ws, header_row, col + 1, label,
             bold=True, bg_color=COLOR_TABLE_HEAD, border=True, align=_center(),
         )
+    _apply_cell(
+        ws, header_row, _ALL_RISKS_SYNC_COL, "Sync",
+        bold=True, bg_color=COLOR_TABLE_HEAD, border=True, align=_center(),
+    )
     for col, label in [
         (_META_RISK_ID,     "_drata_risk_id"),
         (_META_REGISTER_ID, "_drata_register_id"),
@@ -861,6 +869,9 @@ def _build_all_risks_sheet(
         _apply_cell(ws, data_row, COL_OWNERS + 1,    ", ".join(risk.owners),          border=True, align=_center())
         _apply_cell(ws, data_row, COL_CATEGORIES + 1,", ".join(risk.categories),      border=True, align=_center())
 
+        # Sync flag column — blank at generation; user marks "Sync" to queue a push-back
+        _apply_cell(ws, data_row, _ALL_RISKS_SYNC_COL, None, border=True, align=_center())
+
         # Hidden metadata — not visible but read by push_changes.py
         _apply_cell(ws, data_row, _META_RISK_ID,     risk.id,     align=_center())
         _apply_cell(ws, data_row, _META_REGISTER_ID, register_id, align=_center())
@@ -874,7 +885,21 @@ def _build_all_risks_sheet(
 
         data_row += 1
 
-    # Auto-filter on visible columns only (A:N) — hidden cols excluded
+    # Dropdown validation on the Sync column — blank or "Sync"
+    sync_letter = get_column_letter(_ALL_RISKS_SYNC_COL)
+    dv = DataValidation(
+        type="list",
+        formula1='"Sync"',
+        allow_blank=True,
+        showDropDown=False,
+        showErrorMessage=True,
+        errorTitle="Invalid value",
+        error='Select "Sync" from the dropdown or leave blank.',
+    )
+    dv.sqref = f"{sync_letter}{header_row + 1}:{sync_letter}{data_row - 1}"
+    ws.add_data_validation(dv)
+
+    # Auto-filter spans all visible columns including Sync
     ws.auto_filter.ref = f"A{header_row}:{get_column_letter(last_col)}{data_row - 1}"
     ws.freeze_panes = f"B{header_row + 1}"
 
