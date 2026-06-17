@@ -9,6 +9,7 @@ where the hash differs.
 
 Usage:
     python push_changes.py [--input dashboard.xlsx] [--tokens tokens.json] [--dry-run] [--verbose]
+    python push_changes.py --azure [--tokens tokens.azure.json]   # Azure Key Vault mode
 
 After a successful push, run refresh.py to regenerate the xlsx so _orig_hash
 values reflect the new state.
@@ -22,14 +23,15 @@ Read-only (not written back — require numeric IDs not stored in Excel):
 """
 
 import argparse
-import json
 import logging
 import sys
+from pathlib import Path
 from typing import Optional
 
 import requests
 from openpyxl import load_workbook
 
+from auth import load_tokens
 from models import (
     LABEL_TO_STATUS,
     LABEL_TO_TREATMENT,
@@ -48,24 +50,6 @@ DEFAULT_TOKENS = "tokens.json"
 HEADER_ROW     = 5
 
 log = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Token loading
-# ---------------------------------------------------------------------------
-
-def _load_tokens(path: str) -> dict:
-    """Return {tenant_name: {"token": ..., "base_url": ...}}."""
-    with open(path) as f:
-        data = json.load(f)
-    result = {}
-    for t in data["tenants"]:
-        region = t.get("region", "us")
-        result[t["name"]] = {
-            "token":    t["token"],
-            "base_url": REGION_URLS.get(region, REGION_URLS["us"]),
-        }
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +168,15 @@ def _push_risk(
 # Main sync logic
 # ---------------------------------------------------------------------------
 
-def push_changes(input_path: str, tokens_path: str, dry_run: bool = False):
-    tenant_tokens = _load_tokens(tokens_path)
+def push_changes(input_path: str, tokens_path: str, dry_run: bool = False, azure: bool = False):
+    tenants_list = load_tokens(Path(tokens_path), azure=azure)
+    tenant_tokens = {
+        t["name"]: {
+            "token":    t["token"],
+            "base_url": REGION_URLS.get(t.get("region", "us"), REGION_URLS["us"]),
+        }
+        for t in tenants_list
+    }
     log.info("Loaded %d tenant token(s) from %s", len(tenant_tokens), tokens_path)
 
     wb = load_workbook(input_path, data_only=True)
@@ -320,7 +311,9 @@ def main():
     ap.add_argument("--input",   default=DEFAULT_INPUT,  metavar="FILE",
                     help=f"Path to dashboard xlsx (default: {DEFAULT_INPUT})")
     ap.add_argument("--tokens",  default=DEFAULT_TOKENS, metavar="FILE",
-                    help=f"Path to tokens.json (default: {DEFAULT_TOKENS})")
+                    help=f"Path to tokens file (default: {DEFAULT_TOKENS}; use tokens.azure.json with --azure)")
+    ap.add_argument("--azure",   action="store_true",
+                    help="Load tokens from Azure Key Vault (requires AZURE_VAULT_URL env var)")
     ap.add_argument("--dry-run", action="store_true",
                     help="Detect changes and log them without writing to Drata")
     ap.add_argument("--verbose", action="store_true",
@@ -333,7 +326,10 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    push_changes(args.input, args.tokens, dry_run=args.dry_run)
+    if args.azure and args.tokens == DEFAULT_TOKENS:
+        args.tokens = "tokens.azure.json"
+
+    push_changes(args.input, args.tokens, dry_run=args.dry_run, azure=args.azure)
 
 
 if __name__ == "__main__":

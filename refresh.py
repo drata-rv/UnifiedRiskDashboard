@@ -2,36 +2,30 @@
 FirstService Risk Dashboard — Refresh Script
 
 Usage:
-    python refresh.py                    # reads tokens.json, writes dashboard.xlsx
-    python refresh.py --output my.xlsx   # custom output path
-    python refresh.py --dry-run          # validate tokens & connectivity, no file written
-    python refresh.py --verbose          # show per-tenant API call details
+    python refresh.py                              # local tokens.json → dashboard.xlsx
+    python refresh.py --output my.xlsx             # custom output path
+    python refresh.py --dry-run                    # validate tokens & connectivity only
+    python refresh.py --verbose                    # show per-tenant API call details
+    python refresh.py --azure                      # fetch tokens from Azure Key Vault
+    python refresh.py --azure --tokens my.json     # custom Azure manifest path
+
+Token sources:
+    Local (default):  tokens.json — token strings stored directly (see tokens.example.json)
+    Azure (--azure):  tokens.azure.json manifest + AZURE_VAULT_URL env var (see tokens.azure.example.json)
 
 Who runs this:
     A Drata admin with tokens for each tenant (Christian, Brian, Ian, or Adam).
     The output Excel file is then shared with the GRC team (Stephanie, Daniel, etc.)
     who open it like any other Excel file — no Python required on their machines.
-
-tokens.json format (see tokens.example.json):
-    {
-      "tenants": [
-        {
-          "name": "California Closets",
-          "token": "<bearer-token>",
-          "region": "us"        // optional: "us" | "eu" | "apac" (default: "us")
-        },
-        ...
-      ]
-    }
 """
 
 import argparse
-import json
 import logging
 import sys
 from datetime import datetime
 from pathlib import Path
 
+from auth import load_tokens
 from drata_client import DrataClient
 from excel_builder import ExcelBuilder
 from models import TenantData
@@ -56,48 +50,6 @@ REGION_URLS = {
     "eu":   "https://public-api.eu.drata.com/public/v2",
     "apac": "https://public-api.apac.drata.com/public/v2",
 }
-
-
-# ---------------------------------------------------------------------------
-# Token loading
-# ---------------------------------------------------------------------------
-
-def load_tokens(tokens_path: Path) -> list:
-    """
-    Load tenant configurations from tokens.json.
-    Returns a list of dicts with 'name', 'token', and optional 'region' keys.
-    Exits with a clear error message if the file is missing or malformed.
-    """
-    if not tokens_path.exists():
-        logger.error(
-            "tokens.json not found at %s\n"
-            "Copy tokens.example.json to tokens.json and fill in the API tokens.",
-            tokens_path,
-        )
-        sys.exit(1)
-
-    with open(tokens_path) as f:
-        try:
-            config = json.load(f)
-        except json.JSONDecodeError as exc:
-            logger.error("tokens.json is not valid JSON: %s", exc)
-            sys.exit(1)
-
-    tenants = config.get("tenants", [])
-    if not tenants:
-        logger.error("tokens.json has no 'tenants' entries.")
-        sys.exit(1)
-
-    # Validate required fields
-    for i, t in enumerate(tenants):
-        if not t.get("name"):
-            logger.error("tenants[%d] is missing a 'name' field.", i)
-            sys.exit(1)
-        if not t.get("token"):
-            logger.error("tenants[%d] (%s) is missing a 'token' field.", i, t.get("name"))
-            sys.exit(1)
-
-    return tenants
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +95,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tokens",
         default="tokens.json",
-        help="Path to tokens.json (default: tokens.json in current directory)",
+        help="Path to tokens file (default: tokens.json; use tokens.azure.json with --azure)",
+    )
+    parser.add_argument(
+        "--azure",
+        action="store_true",
+        help="Load tokens from Azure Key Vault (requires AZURE_VAULT_URL env var)",
     )
     parser.add_argument(
         "--output",
@@ -169,8 +126,11 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
 
+    if args.azure and args.tokens == "tokens.json":
+        args.tokens = "tokens.azure.json"
+
     tokens_path = Path(args.tokens)
-    tenant_configs = load_tokens(tokens_path)
+    tenant_configs = load_tokens(tokens_path, azure=args.azure)
 
     logger.info("Loaded %d tenant(s) from %s", len(tenant_configs), tokens_path)
 

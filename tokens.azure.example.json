@@ -1,0 +1,20 @@
+{
+  "_comment": "Copy to tokens.azure.json. No tokens are stored here — only metadata. Set AZURE_VAULT_URL in your environment before running with --azure.",
+  "tenants": [
+    {
+      "name": "California Closets",
+      "secret_name": "california-closets",
+      "region": "us"
+    },
+    {
+      "name": "Paul Davis Restoration",
+      "secret_name": "paul-davis-restoration",
+      "region": "us"
+    },
+    {
+      "name": "FirstService Residential",
+      "secret_name": "firstservice-residential",
+      "region": "us"
+    }
+  ]
+}
