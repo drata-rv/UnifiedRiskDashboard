@@ -14,7 +14,7 @@ from typing import List, Optional, Tuple
 
 import requests
 
-from models import Risk, RiskRegister, TenantData
+from .models import Risk, RiskRegister, TenantData
 
 logger = logging.getLogger(__name__)
 

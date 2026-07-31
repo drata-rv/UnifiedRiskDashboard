@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Sync Result &middot; FirstService Risk Dashboard{% endblock %}
+{% block content %}
+  <h1 class="page-title">Sync Result</h1>
+  <div class="card">
+    {% if "tenants" in result %}
+      <p>Pulled {{ result.tenants }} tenant(s), {{ result.registers }} register(s), {{ result.risks }} risk(s).</p>
+    {% else %}
+      <p>Pushed {{ result.pushed }} change(s).</p>
+    {% endif %}
+    {% if result.errors %}
+      <p class="dirty-flag">Errors:</p>
+      <ul>{% for e in result.errors %}<li>{{ e }}</li>{% endfor %}</ul>
+    {% endif %}
+    <a class="btn btn-primary" href="{{ back_url }}">Back</a>
+  </div>
+{% endblock %}

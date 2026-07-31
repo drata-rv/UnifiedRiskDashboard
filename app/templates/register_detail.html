@@ -1,0 +1,189 @@
+{% extends "base.html" %}
+{% block title %}{{ register_name }} &middot; FirstService Risk Dashboard{% endblock %}
+{% block content %}
+  <div class="breadcrumb"><a href="/">All registers</a> /</div>
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">{{ register_name }}</h1>
+      <div class="muted">{{ tenant_name }}{% if dirty_count %} &middot; <span class="dirty-flag">{{ dirty_count }} unpushed change(s)</span>{% endif %}</div>
+    </div>
+    <div class="actions">
+      <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/push">
+        <button class="btn btn-outline" type="submit">Push Data to Drata</button>
+      </form>
+      <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/release">
+        <button class="btn btn-primary" type="submit">Done Editing</button>
+      </form>
+    </div>
+  </div>
+
+  {% if lock_lost %}
+    <div class="lock-banner other">Someone else took over this register while you were editing — your last change was <strong>not saved</strong>. Reload and try again once it's free.</div>
+  {% endif %}
+
+  {% if can_edit %}
+    <div class="lock-banner mine">You are editing this register. It's locked to you while you're here — click "Done Editing" to release it for others.</div>
+  {% else %}
+    <div class="lock-banner other">Locked by {{ lock_status.locked_by }} since {{ lock_status.locked_at }}. Read-only until they finish.</div>
+  {% endif %}
+
+  <div class="heatmap-wrap">
+    <div class="card">
+      <div class="card-title">Risk Heatmap {% if inherent_off %}<span class="muted">({{ inherent_off }} risk(s) outside grid — see table)</span>{% endif %}</div>
+      <table class="heatmap">
+        <tr><th></th>{% for l in range(1, grid_size + 1) %}<th>{{ l | level_label }}</th>{% endfor %}</tr>
+        {% for row in inherent_grid %}
+          <tr>
+            <th>{{ row[0].impact | level_label }}</th>
+            {% for cell in row %}
+              <td class="heatcell tier-badge-{{ cell.tier_class }}">
+                <div class="heatcell-ids">
+                  {% for id in cell.ids %}<a href="#risk-{{ id }}" class="heatcell-link">#{{ id }}</a>{% endfor %}
+                </div>
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </table>
+      <div class="axis-label">&larr; Likelihood &rarr; &nbsp;|&nbsp; Impact &uarr;</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Other Risk heatmap (Residual) {% if residual_off %}<span class="muted">({{ residual_off }} risk(s) outside grid)</span>{% endif %}</div>
+      <table class="heatmap">
+        <tr><th></th>{% for l in range(1, grid_size + 1) %}<th>{{ l | level_label }}</th>{% endfor %}</tr>
+        {% for row in residual_grid %}
+          <tr>
+            <th>{{ row[0].impact | level_label }}</th>
+            {% for cell in row %}
+              <td class="heatcell tier-badge-{{ cell.tier_class }}">
+                <div class="heatcell-ids">
+                  {% for id in cell.ids %}<a href="#risk-{{ id }}" class="heatcell-link">#{{ id }}</a>{% endfor %}
+                </div>
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </table>
+      <div class="axis-label">&larr; Likelihood &rarr; &nbsp;|&nbsp; Impact &uarr;</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Risks</div>
+    <div style="overflow-x:auto">
+    <table class="data register-risks">
+      <tr>
+        {% for label in ["#", "Risk Statement", "Owners", "Categories", "Impact", "Likelihood", "Score", "Treatment", "Treatment Details", "Status", "Residual Impact", "Residual Likelihood", "Residual Score"] %}
+          <th><div class="col-resize">{{ label }}</div></th>
+        {% endfor %}
+      </tr>
+      {% for tier, risks in tiers.items() %}
+        {% if risks %}
+          <tr class="tier-header tier-row-{{ tier | replace(' ', '') }}"><td colspan="13">{{ tier }} Risks</td></tr>
+          {% for r in risks %}
+            <tr id="risk-{{ seq[r.local_id] }}">
+              <td>#{{ seq[r.local_id] }} <span class="muted">{{ r.risk_code }}</span></td>
+              <td><strong>{{ r.title }}</strong><br><span class="muted">{{ r.description }}</span></td>
+              <td>{{ r.owners_json | parse_json | join(", ") }}</td>
+              <td>{{ r.categories_json | parse_json | join(", ") }}</td>
+
+              <td>
+                {% if can_edit %}
+                <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                  <input type="hidden" name="field" value="impact">
+                  <select class="field" name="value" onchange="this.form.submit()">
+                    <option value=""{% if not r.impact %} selected{% endif %}>—</option>
+                    {% for lvl, name in LEVEL_LABELS.items() %}
+                      <option value="{{ lvl }}"{% if r.impact == lvl %} selected{% endif %}>{{ name }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+                {% else %}{{ r.impact | level_label }}{% endif %}
+              </td>
+              <td>
+                {% if can_edit %}
+                <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                  <input type="hidden" name="field" value="likelihood">
+                  <select class="field" name="value" onchange="this.form.submit()">
+                    <option value=""{% if not r.likelihood %} selected{% endif %}>—</option>
+                    {% for lvl, name in LEVEL_LABELS.items() %}
+                      <option value="{{ lvl }}"{% if r.likelihood == lvl %} selected{% endif %}>{{ name }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+                {% else %}{{ r.likelihood | level_label }}{% endif %}
+              </td>
+              <td>{{ r.score if r.score is not none else "—" }}</td>
+
+              <td>
+                {% if can_edit %}
+                <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                  <input type="hidden" name="field" value="treatment_plan">
+                  <select class="field" name="value" onchange="this.form.submit()">
+                    <option value=""{% if not r.treatment_plan %} selected{% endif %}>—</option>
+                    {% for key, name in TREATMENT_LABELS.items() %}
+                      <option value="{{ key }}"{% if r.treatment_plan == key %} selected{% endif %}>{{ name }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+                {% else %}{{ r.treatment_plan | treatment_label }}{% endif %}
+              </td>
+              <td>
+                {% if can_edit %}
+                <form method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                  <input type="hidden" name="field" value="treatment_details">
+                  <textarea class="field" name="value">{{ r.treatment_details or "" }}</textarea>
+                  <button class="btn btn-outline" type="submit" style="margin-top:4px;padding:4px 10px;">Save</button>
+                </form>
+                {% else %}{{ r.treatment_details or "—" }}{% endif %}
+              </td>
+              <td>
+                {% if can_edit %}
+                <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                  <input type="hidden" name="field" value="status">
+                  <select class="field" name="value" onchange="this.form.submit()">
+                    <option value=""{% if not r.status %} selected{% endif %}>—</option>
+                    {% for key, name in STATUS_LABELS.items() %}
+                      <option value="{{ key }}"{% if r.status == key %} selected{% endif %}>{{ name }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+                {% else %}{{ r.status | status_label }}{% endif %}
+              </td>
+
+              <td>
+                {% if can_edit %}
+                <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                  <input type="hidden" name="field" value="residual_impact">
+                  <select class="field" name="value" onchange="this.form.submit()">
+                    <option value=""{% if not r.residual_impact %} selected{% endif %}>—</option>
+                    {% for lvl, name in LEVEL_LABELS.items() %}
+                      <option value="{{ lvl }}"{% if r.residual_impact == lvl %} selected{% endif %}>{{ name }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+                {% else %}{{ r.residual_impact | level_label }}{% endif %}
+              </td>
+              <td>
+                {% if can_edit %}
+                <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                  <input type="hidden" name="field" value="residual_likelihood">
+                  <select class="field" name="value" onchange="this.form.submit()">
+                    <option value=""{% if not r.residual_likelihood %} selected{% endif %}>—</option>
+                    {% for lvl, name in LEVEL_LABELS.items() %}
+                      <option value="{{ lvl }}"{% if r.residual_likelihood == lvl %} selected{% endif %}>{{ name }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+                {% else %}{{ r.residual_likelihood | level_label }}{% endif %}
+              </td>
+              <td>{{ r.residual_score if r.residual_score is not none else "—" }}</td>
+            </tr>
+          {% endfor %}
+        {% endif %}
+      {% endfor %}
+    </table>
+    </div>
+  </div>
+{% endblock %}

@@ -1,0 +1,11 @@
+.git
+.claude
+__pycache__
+*.pyc
+data/
+tokens.json
+tokens.azure.json
+*.xlsx
+prototype files/
+.venv
+venv

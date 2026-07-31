@@ -22,6 +22,8 @@ LEVEL_LABELS = {
     3: "High",
     4: "Very High",
     5: "Critical",
+    6: "Severe",
+    7: "Catastrophic",
 }
 LABEL_TO_LEVEL = {v: k for k, v in LEVEL_LABELS.items()}
 

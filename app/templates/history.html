@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}History &middot; FirstService Risk Dashboard{% endblock %}
+{% block content %}
+  <h1 class="page-title">Action History</h1>
+  <div class="muted" style="margin-bottom:16px;">Every field edit is logged here. Roll back any change that shouldn't have happened.</div>
+  {% if rollback_failed %}
+    <div class="lock-banner other">Couldn't roll back that change — it may have already been superseded by a newer edit, already rolled back, or the register is currently locked to someone else.</div>
+  {% endif %}
+
+  <div class="card">
+    <table class="data history-table">
+      <tr>
+        <th>When</th><th>Tenant</th><th>Risk</th><th>Field</th>
+        <th>Old Value</th><th>New Value</th><th>Changed By</th><th></th>
+      </tr>
+      {% for e in entries %}
+        <tr{% if e.rolled_back %} style="opacity:.5"{% endif %}>
+          <td>{{ e.changed_at }}</td>
+          <td>{{ e.tenant_name }}</td>
+          <td>{{ e.risk_code }}</td>
+          <td>{{ e.field }}</td>
+          <td>{{ e.old_value or "—" }}</td>
+          <td>{{ e.new_value or "—" }}</td>
+          <td>{{ e.changed_by }}</td>
+          <td>
+            {% if not e.rolled_back %}
+            <form class="inline" method="post" action="/history/{{ e.id }}/rollback">
+              <button class="btn btn-danger" type="submit" style="padding:4px 10px;">Roll back</button>
+            </form>
+            {% else %}<span class="muted">rolled back</span>{% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="muted">No changes recorded yet.</td></tr>
+      {% endfor %}
+    </table>
+  </div>
+{% endblock %}

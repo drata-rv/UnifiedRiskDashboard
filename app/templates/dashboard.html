@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Dashboard &middot; FirstService Risk Dashboard{% endblock %}
+{% block content %}
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">All registers</h1>
+      <div class="muted">Unified view across all tenants</div>
+    </div>
+    <div class="actions">
+      <form class="inline" method="post" action="/sync/push">
+        <button class="btn btn-outline" type="submit">Push Data to Drata</button>
+      </form>
+      <form class="inline" method="post" action="/sync/pull">
+        <button class="btn btn-primary" type="submit">Pull Latest</button>
+      </form>
+    </div>
+  </div>
+
+  {% if not rows %}
+    <div class="card">
+      <p class="muted">No data cached yet. Click <strong>Pull Latest</strong> to fetch risk registers from Drata.</p>
+    </div>
+  {% else %}
+  <div class="card" style="padding:0;">
+    <div style="overflow-x:auto">
+    <table class="data register-list">
+      <tr>
+        <th>Tenant</th>
+        <th>Register</th>
+        {% for tier in tier_cols %}<th class="num">{{ tier }}</th>{% endfor %}
+        <th class="num">Total</th>
+      </tr>
+      {% for row in rows %}
+        <tr>
+          <td>{{ row.tenant_name }}</td>
+          <td>
+            <a href="/tenants/{{ row.tenant_name | urlencode }}/registers/{{ row.register_id }}">{{ row.register_name }}</a>
+            {% if row.dirty_count %}<span class="dirty-flag">&middot; {{ row.dirty_count }} unpushed</span>{% endif %}
+          </td>
+          {% for tier in tier_cols %}
+            <td class="num"><span class="grade-cell tier-badge-{{ tier | replace(' ', '') }}">{{ row.counts[tier] }}</span></td>
+          {% endfor %}
+          <td class="num">{{ row.total }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+    </div>
+  </div>
+  {% endif %}
+{% endblock %}

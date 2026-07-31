@@ -1,7 +1,17 @@
 # Runtime token config — never commit
 tokens.json
+tokens.azure.json
 tokenList.txt
 *.env
+
+# Local SQLite cache/audit-log
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# prototype design reference (screenshots + Drata DOM captures — not app code)
+prototype files/
 
 # Reference / planning docs — not needed to run the script
 PROJECT_SUMMARY.md
@@ -18,5 +28,8 @@ dashboard*.xlsx
 __pycache__/
 *.pyc
 *.pyo
-.venv/
+.venv*/
 venv/
+
+# Local dev tooling config
+.claude/
