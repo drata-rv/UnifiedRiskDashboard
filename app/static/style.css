@@ -264,7 +264,13 @@ select.field, textarea.field, input.field {
   width: 100%; font-family: inherit; background: var(--background-neutral-surface-base-default);
   color: var(--text-neutral-initial);
 }
-textarea.field { min-height: 44px; resize: vertical; }
+textarea.field { min-height: 44px; max-height: 120px; resize: vertical; overflow-y: auto; }
+
+/* Consistent stack for an editable text field + its Save button — used for
+   title/description/treatment details instead of one-off inline styles. */
+.edit-stack { display: flex; flex-direction: column; gap: 6px; }
+.edit-stack + .edit-stack { margin-top: 10px; }
+.btn-save { padding: 3px 10px; font-size: 11px; align-self: flex-start; }
 
 /* Heatmap */
 table.heatmap { border-collapse: collapse; font-size: 13px; margin-bottom: 8px; width: 100%; table-layout: auto; }
@@ -291,7 +297,17 @@ table.heatmap td.heatcell { font-weight: 700; }
 .heatcell-ids a.heatcell-link:hover { text-decoration: underline; }
 
 .axis-label { text-align: center; font-size: 12px; color: var(--text-neutral-faded); margin: 6px 0; font-weight: 600; }
+
+/* Grid items don't shrink below their content's natural width by default
+   (implicit min-width:auto) — without min-width:0 here, a heatmap dense
+   enough to need extra sub-columns forces the whole grid, and the page,
+   wider than the content area by however much that one register's data
+   happens to need. min-width:0 + the table's own overflow-x:auto (below)
+   makes every heatmap contain its own overflow instead, so both cards —
+   and the risk table underneath — always share the same outer edge. */
 .heatmap-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: start; }
+.heatmap-wrap > .card { min-width: 0; }
+.heatmap-scroll { overflow-x: auto; }
 @media (max-width: 900px) { .heatmap-wrap { grid-template-columns: 1fr; } }
 
 /* Lock banner */

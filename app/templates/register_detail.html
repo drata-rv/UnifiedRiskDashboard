@@ -30,6 +30,7 @@
   <div class="heatmap-wrap">
     <div class="card">
       <div class="card-title">Risk Heatmap {% if inherent_off %}<span class="muted">({{ inherent_off }} risk(s) outside grid — see table)</span>{% endif %}</div>
+      <div class="heatmap-scroll">
       <table class="heatmap">
         <tr><th></th>{% for l in range(1, grid_size + 1) %}<th>{{ l | level_label }}</th>{% endfor %}</tr>
         {% for row in inherent_grid %}
@@ -45,11 +46,13 @@
           </tr>
         {% endfor %}
       </table>
+      </div>
       <div class="axis-label">&larr; Likelihood &rarr; &nbsp;|&nbsp; Impact &uarr;</div>
     </div>
 
     <div class="card">
       <div class="card-title">Other Risk heatmap (Residual) {% if residual_off %}<span class="muted">({{ residual_off }} risk(s) outside grid)</span>{% endif %}</div>
+      <div class="heatmap-scroll">
       <table class="heatmap">
         <tr><th></th>{% for l in range(1, grid_size + 1) %}<th>{{ l | level_label }}</th>{% endfor %}</tr>
         {% for row in residual_grid %}
@@ -65,6 +68,7 @@
           </tr>
         {% endfor %}
       </table>
+      </div>
       <div class="axis-label">&larr; Likelihood &rarr; &nbsp;|&nbsp; Impact &uarr;</div>
     </div>
   </div>
@@ -86,16 +90,20 @@
               <td>#{{ seq[r.local_id] }} <span class="muted">{{ r.risk_code }}</span></td>
               <td>
                 {% if can_edit %}
-                <form method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
-                  <input type="hidden" name="field" value="title">
-                  <input class="field" type="text" name="value" value="{{ r.title }}">
-                  <button class="btn btn-outline" type="submit" style="margin-top:4px;padding:2px 8px;font-size:11px;">Save Title</button>
-                </form>
-                <form method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit" style="margin-top:8px;">
-                  <input type="hidden" name="field" value="description">
-                  <textarea class="field" name="value">{{ r.description }}</textarea>
-                  <button class="btn btn-outline" type="submit" style="margin-top:4px;padding:2px 8px;font-size:11px;">Save Description</button>
-                </form>
+                <div class="edit-stack">
+                  <form method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                    <input type="hidden" name="field" value="title">
+                    <input class="field" type="text" name="value" value="{{ r.title }}">
+                    <button class="btn btn-outline btn-save" type="submit">Save Title</button>
+                  </form>
+                </div>
+                <div class="edit-stack">
+                  <form method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                    <input type="hidden" name="field" value="description">
+                    <textarea class="field" name="value">{{ r.description }}</textarea>
+                    <button class="btn btn-outline btn-save" type="submit">Save Description</button>
+                  </form>
+                </div>
                 {% else %}
                 <strong>{{ r.title }}</strong><br><span class="muted">{{ r.description }}</span>
                 {% endif %}
@@ -162,11 +170,13 @@
               </td>
               <td>
                 {% if can_edit %}
-                <form method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
-                  <input type="hidden" name="field" value="treatment_details">
-                  <textarea class="field" name="value">{{ r.treatment_details or "" }}</textarea>
-                  <button class="btn btn-outline" type="submit" style="margin-top:4px;padding:4px 10px;">Save</button>
-                </form>
+                <div class="edit-stack">
+                  <form method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                    <input type="hidden" name="field" value="treatment_details">
+                    <textarea class="field" name="value">{{ r.treatment_details or "" }}</textarea>
+                    <button class="btn btn-outline btn-save" type="submit">Save</button>
+                  </form>
+                </div>
                 {% else %}{{ r.treatment_details or "—" }}{% endif %}
               </td>
               <td>
