@@ -2,11 +2,14 @@
 Pull from Drata into the local cache; push locally-edited (dirty) rows back.
 
 Both are explicit, human-triggered actions (buttons in the UI) — never
-automatic. Mirrors the field rules from the old push_changes.py: title,
-description, owners, categories, score, and residualScore are read-only
-(server-computed or ID-bound) and are never written back.
+automatic. Confirmed live against the API: title, description, and owners
+(as [{"id": <int>}]) ARE editable via PUT. Only score/residualScore are
+truly read-only (server-computed). Categories are treated as read-only here
+not because the API forbids it, but because there's no confirmed endpoint
+to enumerate valid category ids to build a picker from.
 """
 
+import json
 import logging
 
 import requests
@@ -37,6 +40,9 @@ def pull_all() -> dict:
             for risk in register.risks:
                 db.upsert_risk_from_api(t["name"], register.id, register.name, risk)
                 results["risks"] += 1
+
+        for user in client.get_users():
+            db.upsert_user(t["name"], user)
 
     return results
 
@@ -89,8 +95,17 @@ def _build_payload(row) -> dict:
     of these fields locally, that specific field's clear cannot be synced to
     Drata (the other fields on the same row still push normally). Surfacing
     that clearly is safer than guessing and breaking every push on the row.
+
+    title/description are always sent (they're never legitimately blank).
+    owners is sent as [{"id": ...}] — confirmed that shape is required;
+    plain integers are rejected. Omitted (not sent as []) when unset, for
+    the same null-rejection reason as the scored fields above.
     """
-    payload = {"treatmentDetails": row["treatment_details"] or ""}
+    payload = {
+        "treatmentDetails": row["treatment_details"] or "",
+        "title": row["title"] or "",
+        "description": row["description"] or "",
+    }
     for field, api_field in [
         ("impact", "impact"),
         ("likelihood", "likelihood"),
@@ -102,4 +117,9 @@ def _build_payload(row) -> dict:
         value = row[field]
         if value is not None:
             payload[api_field] = value
+
+    owners = json.loads(row["owners_json"]) if row["owners_json"] else []
+    if owners:
+        payload["owners"] = [{"id": o["id"]} for o in owners]
+
     return payload

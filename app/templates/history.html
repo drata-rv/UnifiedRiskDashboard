@@ -19,8 +19,13 @@
           <td>{{ e.tenant_name }}</td>
           <td>{{ e.risk_code }}</td>
           <td>{{ e.field }}</td>
-          <td>{{ e.old_value or "—" }}</td>
-          <td>{{ e.new_value or "—" }}</td>
+          {% if e.field == "owners_json" %}
+            <td>{{ (e.old_value | parse_json | map(attribute="name") | join(", ")) or "—" }}</td>
+            <td>{{ (e.new_value | parse_json | map(attribute="name") | join(", ")) or "—" }}</td>
+          {% else %}
+            <td>{{ e.old_value or "—" }}</td>
+            <td>{{ e.new_value or "—" }}</td>
+          {% endif %}
           <td>{{ e.changed_by }}</td>
           <td>
             {% if not e.rolled_back %}

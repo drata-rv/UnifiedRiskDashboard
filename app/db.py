@@ -1,12 +1,15 @@
 """
 SQLite persistence — one file, stdlib sqlite3, no ORM.
 
-Three tables:
+Four tables:
   risks      — cached copy of every risk pulled from Drata, plus a `dirty`
                flag for local edits not yet pushed back.
   locks      — one row per register currently being edited (advisory,
                TTL-based — see locks.py).
   audit_log  — append-only field-level change history, used for rollback.
+  users      — per-tenant pool of valid risk owners, cached from /users
+               (there's no way to look up valid owners on demand, so the
+               whole tenant directory is cached at pull time).
 """
 
 import json
@@ -66,6 +69,14 @@ CREATE TABLE IF NOT EXISTS audit_log (
     changed_by     TEXT NOT NULL,
     changed_at     TEXT NOT NULL,
     rolled_back    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    tenant_name  TEXT NOT NULL,
+    user_id      INTEGER NOT NULL,
+    name         TEXT NOT NULL,
+    email        TEXT,
+    PRIMARY KEY (tenant_name, user_id)
 );
 """
 
@@ -210,6 +221,7 @@ def list_dirty_risks(tenant_name: str = None, register_id: int = None) -> list:
 EDITABLE_FIELDS = {
     "impact", "likelihood", "treatment_plan", "treatment_details",
     "status", "residual_impact", "residual_likelihood",
+    "title", "description", "owners_json",
 }
 
 
@@ -253,3 +265,26 @@ def mark_pushed(local_ids: list):
             "UPDATE risks SET dirty=0, last_pushed_at=? WHERE local_id=?",
             [(now(), lid) for lid in local_ids],
         )
+
+
+# ---------------------------------------------------------------------------
+# Users — the pool of valid risk owners for a tenant, cached at pull time
+# ---------------------------------------------------------------------------
+
+def upsert_user(tenant_name: str, user: dict) -> None:
+    with tx() as conn:
+        conn.execute(
+            """
+            INSERT INTO users (tenant_name, user_id, name, email) VALUES (?,?,?,?)
+            ON CONFLICT(tenant_name, user_id) DO UPDATE SET name=excluded.name, email=excluded.email
+            """,
+            (tenant_name, user["id"], user["name"], user["email"]),
+        )
+
+
+def list_users(tenant_name: str) -> list:
+    conn = get_connection()
+    return conn.execute(
+        "SELECT user_id, name, email FROM users WHERE tenant_name=? ORDER BY name",
+        (tenant_name,),
+    ).fetchall()

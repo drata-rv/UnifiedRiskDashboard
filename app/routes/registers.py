@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
@@ -90,6 +92,7 @@ def register_detail(request: Request, tenant_name: str, register_id: int, lock_l
         "seq": seq,
         "dirty_count": sum(1 for r in risks if r["dirty"]),
         "lock_lost": bool(lock_lost),
+        "users": db.list_users(tenant_name),
     })
 
 
@@ -108,13 +111,30 @@ def edit_risk(request: Request, tenant_name: str, register_id: int, local_id: in
     if not locks.acquire_or_heartbeat(tenant_name, register_id, user):
         return RedirectResponse(f"/tenants/{tenant_name}/registers/{register_id}?lock_lost=1", status_code=303)
 
-    old_value = row[field]
-    new_value = value if value != "" else None
-    if field in _INT_FIELDS and new_value is not None:
-        try:
-            new_value = int(new_value)
-        except ValueError:
-            raise HTTPException(400, f"{value!r} is not a valid value for {field}")
+    if field == "owners_json":
+        # value is the selected user's numeric id (from the owner dropdown),
+        # not the JSON itself — look it up against this tenant's cached user
+        # directory and build the [{"id", "name"}] shape the row expects.
+        old_value = row["owners_json"]
+        if value == "":
+            new_value = json.dumps([])
+        else:
+            try:
+                user_id = int(value)
+            except ValueError:
+                raise HTTPException(400, f"{value!r} is not a valid owner id")
+            match = next((u for u in db.list_users(tenant_name) if u["user_id"] == user_id), None)
+            if match is None:
+                raise HTTPException(400, "selected owner not found for this tenant")
+            new_value = json.dumps([{"id": match["user_id"], "name": match["name"]}])
+    else:
+        old_value = row[field]
+        new_value = value if value != "" else None
+        if field in _INT_FIELDS and new_value is not None:
+            try:
+                new_value = int(new_value)
+            except ValueError:
+                raise HTTPException(400, f"{value!r} is not a valid value for {field}")
 
     db.update_risk_field(local_id, field, new_value)
     audit.record_change(local_id, row["tenant_name"], row["risk_code"], field, old_value, new_value, user)

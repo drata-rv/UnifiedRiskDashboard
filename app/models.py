@@ -163,8 +163,8 @@ class Risk:
     treatment_plan: Optional[str]    # MITIGATE / TRANSFER / AVOID / ACCEPT / UNTREATED
     treatment_details: Optional[str] # Free-text description of activities
     status: Optional[str]            # ACTIVE / ARCHIVED / CLOSED
-    categories: List[str] = field(default_factory=list)
-    owners: List[str] = field(default_factory=list)
+    categories: List[str] = field(default_factory=list)      # display names only — read-only
+    owners: List[dict] = field(default_factory=list)         # [{"id": int, "name": str}] — editable
 
     # ------------------------------------------------------------------
     # Convenience properties (display-ready strings)

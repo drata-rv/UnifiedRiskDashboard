@@ -143,6 +143,23 @@ class DrataClient:
         items = self._paginate(f"/risk-registers/{register_id}/risks", params)
         return [self._parse_risk(item) for item in items]
 
+    def get_users(self) -> List[dict]:
+        """
+        Return every user in this tenant — the pool of valid risk owners.
+        Confirmed live: /users is paginated the same way as everything else
+        and returns {id, email, firstName, lastName, ...} per record.
+        """
+        items = self._paginate("/users")
+        return [
+            {
+                "id": item["id"],
+                "email": item.get("email") or "",
+                "name": f"{item.get('firstName') or ''} {item.get('lastName') or ''}".strip()
+                        or item.get("email") or "",
+            }
+            for item in items
+        ]
+
     def fetch_all_data(self) -> Tuple[List[RiskRegister], Optional[str]]:
         """
         Convenience method that fetches all registers and all their risks in
@@ -169,14 +186,21 @@ class DrataClient:
         """
         Parse a raw Drata risk JSON object into a Risk dataclass.
 
-        Owners come back as objects with a 'name' field when expanded.
-        Categories come back as objects with a 'name' field when expanded.
-        Both can also arrive as empty lists if no data is present.
+        Owners come back as {id, email, firstName, lastName} when expanded —
+        the numeric id is kept (not just a display string) because the PUT
+        endpoint requires owners as [{"id": <int>}] to reassign them.
+        Categories come back as objects with a 'name' field; kept as plain
+        display strings since there's no confirmed way to look up valid
+        category ids to build a picker (categories are read-only here).
         """
         owners = [
-            o.get("name") or o.get("email") or str(o.get("id", ""))
+            {
+                "id": o["id"],
+                "name": f"{o.get('firstName') or ''} {o.get('lastName') or ''}".strip()
+                        or o.get("email") or str(o["id"]),
+            }
             for o in item.get("owners", [])
-            if isinstance(o, dict)
+            if isinstance(o, dict) and o.get("id") is not None
         ]
         categories = [
             c.get("name", "")
@@ -199,5 +223,5 @@ class DrataClient:
             treatment_details=item.get("treatmentDetails"),
             status=item.get("status"),
             categories=[c for c in categories if c],
-            owners=[o for o in owners if o],
+            owners=owners,
         )

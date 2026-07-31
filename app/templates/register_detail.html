@@ -84,8 +84,39 @@
           {% for r in risks %}
             <tr id="risk-{{ seq[r.local_id] }}">
               <td>#{{ seq[r.local_id] }} <span class="muted">{{ r.risk_code }}</span></td>
-              <td><strong>{{ r.title }}</strong><br><span class="muted">{{ r.description }}</span></td>
-              <td>{{ r.owners_json | parse_json | join(", ") }}</td>
+              <td>
+                {% if can_edit %}
+                <form method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                  <input type="hidden" name="field" value="title">
+                  <input class="field" type="text" name="value" value="{{ r.title }}">
+                  <button class="btn btn-outline" type="submit" style="margin-top:4px;padding:2px 8px;font-size:11px;">Save Title</button>
+                </form>
+                <form method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit" style="margin-top:8px;">
+                  <input type="hidden" name="field" value="description">
+                  <textarea class="field" name="value">{{ r.description }}</textarea>
+                  <button class="btn btn-outline" type="submit" style="margin-top:4px;padding:2px 8px;font-size:11px;">Save Description</button>
+                </form>
+                {% else %}
+                <strong>{{ r.title }}</strong><br><span class="muted">{{ r.description }}</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if can_edit %}
+                {% set current_owners = r.owners_json | parse_json %}
+                {% set current_owner_id = current_owners[0].id if current_owners else none %}
+                <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/risks/{{ r.local_id }}/edit">
+                  <input type="hidden" name="field" value="owners_json">
+                  <select class="field" name="value" onchange="this.form.submit()">
+                    <option value=""{% if not current_owner_id %} selected{% endif %}>—</option>
+                    {% for u in users %}
+                      <option value="{{ u.user_id }}"{% if u.user_id == current_owner_id %} selected{% endif %}>{{ u.name }}</option>
+                    {% endfor %}
+                  </select>
+                </form>
+                {% else %}
+                {{ r.owners_json | parse_json | map(attribute="name") | join(", ") }}
+                {% endif %}
+              </td>
               <td>{{ r.categories_json | parse_json | join(", ") }}</td>
 
               <td>
