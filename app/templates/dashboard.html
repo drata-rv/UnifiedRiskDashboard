@@ -7,6 +7,11 @@
       <div class="muted">Unified view across all tenants</div>
     </div>
     <div class="actions">
+      <div class="export-group">
+        <span class="muted">View:</span>
+        <a class="btn {{ 'btn-primary' if active_view == 'inherent' else 'btn-outline' }}" href="/?view=inherent{% if sort %}&sort={{ sort | urlencode }}{% endif %}">Inherent</a>
+        <a class="btn {{ 'btn-primary' if active_view == 'residual' else 'btn-outline' }}" href="/?view=residual{% if sort %}&sort={{ sort | urlencode }}{% endif %}">Residual</a>
+      </div>
       <form class="inline" method="post" action="/sync/push">
         <button class="btn btn-outline" type="submit">Push Data to Drata</button>
       </form>
@@ -27,8 +32,8 @@
       <tr>
         <th>Tenant</th>
         <th>Register</th>
-        {% for tier in tier_cols %}<th class="num">{{ tier }}</th>{% endfor %}
-        <th class="num">Total</th>
+        {% for tier in tier_cols %}<th class="num"><a href="/?view={{ active_view }}&sort={{ tier | urlencode }}">{{ tier }}</a></th>{% endfor %}
+        <th class="num"><a href="/?view={{ active_view }}&sort=Total">Total</a></th>
       </tr>
       {% for row in rows %}
         <tr>
@@ -38,7 +43,7 @@
             {% if row.dirty_count %}<span class="dirty-flag">&middot; {{ row.dirty_count }} unpushed</span>{% endif %}
           </td>
           {% for tier in tier_cols %}
-            <td class="num"><span class="grade-cell tier-badge-{{ tier | replace(' ', '') }}">{{ row.counts[tier] }}</span></td>
+            <td class="num"><span class="grade-cell tier-badge-{{ tier | replace(' ', '') }}">{{ row[counts_key][tier] }}</span></td>
           {% endfor %}
           <td class="num">{{ row.total }}</td>
         </tr>
