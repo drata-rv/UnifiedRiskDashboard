@@ -4,55 +4,14 @@ from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from .. import audit, db, locks, sync_service
+from ..heatmap import build_heatmap, grid_size as compute_grid_size, seq_map
 from ..models import score_to_tier
 from ..templating import templates
 from ..user_auth import get_current_user
 
 router = APIRouter()
 
-_TIER_ORDER = {"Very High": 0, "High": 1, "Moderate": 2, "Low": 3, "Unscored": 4}
 _INT_FIELDS = {"impact", "likelihood", "residual_impact", "residual_likelihood"}
-
-
-def _grid_size(risks: list, default: int = 4, cap: int = 7) -> int:
-    max_val = default
-    for r in risks:
-        for field in ("impact", "likelihood", "residual_impact", "residual_likelihood"):
-            v = r[field]
-            if v is not None:
-                max_val = max(max_val, v)
-    return min(max_val, cap)
-
-
-def _seq_map(risks: list) -> dict:
-    ordered = sorted(
-        risks,
-        key=lambda r: (_TIER_ORDER.get(score_to_tier(r["score"]), 99), -(r["score"] or 0), r["title"] or ""),
-    )
-    return {r["local_id"]: i for i, r in enumerate(ordered, start=1)}
-
-
-def _build_heatmap(risks: list, grid_size: int, impact_field: str, likelihood_field: str, seq: dict):
-    cells = {(i, l): [] for i in range(1, grid_size + 1) for l in range(1, grid_size + 1)}
-    off_grid = 0
-    for r in risks:
-        imp, lik = r[impact_field], r[likelihood_field]
-        if imp is None or lik is None:
-            continue
-        if imp > grid_size or lik > grid_size or imp < 1 or lik < 1:
-            off_grid += 1
-            continue
-        cells[(imp, lik)].append(seq[r["local_id"]])
-
-    grid = []
-    for imp in range(grid_size, 0, -1):
-        row = []
-        for lik in range(1, grid_size + 1):
-            ids = cells[(imp, lik)]
-            tier = score_to_tier(imp * lik)
-            row.append({"impact": imp, "likelihood": lik, "ids": ids, "tier_class": tier.replace(" ", "")})
-        grid.append(row)
-    return grid, off_grid
 
 
 @router.get("/tenants/{tenant_name}/registers/{register_id}")
@@ -63,10 +22,10 @@ def register_detail(request: Request, tenant_name: str, register_id: int, lock_l
     can_edit = locks.acquire_or_heartbeat(tenant_name, register_id, user)
     lock_status = locks.get_status(tenant_name, register_id)
 
-    grid_size = _grid_size(risks)
-    seq = _seq_map(risks)
-    inherent_grid, inherent_off = _build_heatmap(risks, grid_size, "impact", "likelihood", seq)
-    residual_grid, residual_off = _build_heatmap(risks, grid_size, "residual_impact", "residual_likelihood", seq)
+    size = compute_grid_size(risks)
+    seq = seq_map(risks)
+    inherent_grid, inherent_off = build_heatmap(risks, size, "impact", "likelihood", seq)
+    residual_grid, residual_off = build_heatmap(risks, size, "residual_impact", "residual_likelihood", seq)
 
     tiers = {"Very High": [], "High": [], "Moderate": [], "Low": [], "Unscored": []}
     for r in risks:
@@ -83,7 +42,7 @@ def register_detail(request: Request, tenant_name: str, register_id: int, lock_l
         "user": user,
         "can_edit": can_edit,
         "lock_status": lock_status,
-        "grid_size": grid_size,
+        "grid_size": size,
         "inherent_grid": inherent_grid,
         "inherent_off": inherent_off,
         "residual_grid": residual_grid,

@@ -8,6 +8,13 @@
       <div class="muted">{{ tenant_name }}{% if dirty_count %} &middot; <span class="dirty-flag">{{ dirty_count }} unpushed change(s)</span>{% endif %}</div>
     </div>
     <div class="actions">
+      <div class="export-group">
+        <span class="muted">Export:</span>
+        <a class="btn btn-outline" href="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/export/heatmap.png">Heatmap PNG</a>
+        <a class="btn btn-outline" href="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/export/heatmap.pdf">Heatmap PDF</a>
+        <a class="btn btn-outline" href="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/export/risks.csv">Risks CSV</a>
+        <a class="btn btn-outline" href="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/export/risks.xlsx">Risks XLSX</a>
+      </div>
       <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/push">
         <button class="btn btn-outline" type="submit">Push Data to Drata</button>
       </form>

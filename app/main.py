@@ -14,7 +14,7 @@ from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
-from .routes import dashboard, history, registers, sync
+from .routes import dashboard, export, history, registers, sync
 
 app = FastAPI(title="FirstService Risk Dashboard")
 
@@ -45,6 +45,7 @@ app.include_router(dashboard.router)
 app.include_router(registers.router)
 app.include_router(sync.router)
 app.include_router(history.router)
+app.include_router(export.router)
 
 
 @app.on_event("startup")
