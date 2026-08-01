@@ -319,6 +319,7 @@ table.heatmap td.heatcell { font-weight: 700; }
 }
 .lock-banner.mine { background: var(--background-success-mild); color: var(--text-success-initial); border-color: var(--border-success-initial); }
 .lock-banner.other { background: var(--background-critical-mild); color: var(--text-critical-initial); border-color: var(--border-critical-initial); }
+.lock-banner.due { background: var(--background-warning-mild); color: var(--text-warning-initial); border-color: var(--border-neutral-initial); }
 
 .muted { color: var(--text-neutral-faded); }
 .dirty-flag { color: var(--text-critical-initial); font-weight: 700; font-size: 11px; }

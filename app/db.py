@@ -86,6 +86,13 @@ CREATE TABLE IF NOT EXISTS reassessments (
     marked_by     TEXT NOT NULL,
     marked_at     TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS register_settings (
+    tenant_name                TEXT NOT NULL,
+    register_id                INTEGER NOT NULL,
+    reassessment_cadence_days  INTEGER,
+    PRIMARY KEY (tenant_name, register_id)
+);
 """
 
 
@@ -374,3 +381,56 @@ def list_reassessments(tenant_name: str, register_id: int) -> list:
         "SELECT * FROM reassessments WHERE tenant_name=? AND register_id=? ORDER BY id DESC",
         (tenant_name, register_id),
     ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Register settings — currently just an optional reassessment cadence, used
+# to show an in-app "due" banner. No scheduler, no notifications: computed
+# fresh at page-load, same lightweight spirit as the rest of this app.
+# ---------------------------------------------------------------------------
+
+def get_register_cadence(tenant_name: str, register_id: int):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT reassessment_cadence_days FROM register_settings WHERE tenant_name=? AND register_id=?",
+        (tenant_name, register_id),
+    ).fetchone()
+    return row["reassessment_cadence_days"] if row else None
+
+
+def set_register_cadence(tenant_name: str, register_id: int, cadence_days) -> None:
+    with tx() as conn:
+        conn.execute(
+            """
+            INSERT INTO register_settings (tenant_name, register_id, reassessment_cadence_days)
+            VALUES (?,?,?)
+            ON CONFLICT(tenant_name, register_id) DO UPDATE SET
+                reassessment_cadence_days=excluded.reassessment_cadence_days
+            """,
+            (tenant_name, register_id, cadence_days),
+        )
+
+
+def is_reassessment_due(tenant_name: str, register_id: int) -> bool:
+    cadence_days = get_register_cadence(tenant_name, register_id)
+    if not cadence_days:
+        return False
+
+    conn = get_connection()
+    mark = conn.execute(
+        "SELECT marked_at FROM reassessments WHERE tenant_name=? AND register_id=? ORDER BY id DESC LIMIT 1",
+        (tenant_name, register_id),
+    ).fetchone()
+    if mark:
+        reference = mark["marked_at"]
+    else:
+        pulled = conn.execute(
+            "SELECT MIN(last_pulled_at) AS earliest FROM risks WHERE tenant_name=? AND register_id=? AND last_pulled_at IS NOT NULL",
+            (tenant_name, register_id),
+        ).fetchone()
+        reference = pulled["earliest"] if pulled else None
+    if not reference:
+        return False
+
+    elapsed = datetime.now(timezone.utc) - datetime.fromisoformat(reference)
+    return elapsed.days >= cadence_days

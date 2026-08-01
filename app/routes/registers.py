@@ -52,6 +52,8 @@ def register_detail(request: Request, tenant_name: str, register_id: int, lock_l
         "dirty_count": sum(1 for r in risks if r["dirty"]),
         "lock_lost": bool(lock_lost),
         "users": db.list_users(tenant_name),
+        "cadence_days": db.get_register_cadence(tenant_name, register_id),
+        "reassessment_due": db.is_reassessment_due(tenant_name, register_id),
     })
 
 
@@ -119,6 +121,19 @@ def push_register(request: Request, tenant_name: str, register_id: int):
 @router.post("/tenants/{tenant_name}/registers/{register_id}/reassess")
 def mark_reassessed(request: Request, tenant_name: str, register_id: int):
     db.record_reassessment(tenant_name, register_id, get_current_user(request))
+    return RedirectResponse(f"/tenants/{tenant_name}/registers/{register_id}", status_code=303)
+
+
+@router.post("/tenants/{tenant_name}/registers/{register_id}/settings/cadence")
+def set_cadence(request: Request, tenant_name: str, register_id: int, cadence_days: str = Form("")):
+    if cadence_days == "":
+        value = None
+    else:
+        try:
+            value = int(cadence_days)
+        except ValueError:
+            raise HTTPException(400, f"{cadence_days!r} is not a valid cadence")
+    db.set_register_cadence(tenant_name, register_id, value)
     return RedirectResponse(f"/tenants/{tenant_name}/registers/{register_id}", status_code=303)
 
 
