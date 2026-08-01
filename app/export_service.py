@@ -11,16 +11,18 @@ import csv
 import io
 import json
 import re
+import textwrap
 
 import matplotlib
 matplotlib.use("Agg")
 from matplotlib import pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.patches import Rectangle
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from . import db, heatmap as heatmap_mod
+from . import db, heatmap as heatmap_mod, history_service
 from .models import STATUS_LABELS, TIER_COLORS, TIER_ROW_COLORS, TREATMENT_LABELS, level_label, score_to_tier
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9]+")
@@ -190,4 +192,87 @@ def rows_to_xlsx(rows: list, register_name: str) -> bytes:
 
     buf = io.BytesIO()
     wb.save(buf)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Board report bundle — heatmap page + top-5 movers/narrative page, built on
+# the same reconstruction diff the /compare view uses (history_service).
+# Narrative is templated sentences, not generated — deterministic, no new
+# integration to maintain.
+# ---------------------------------------------------------------------------
+
+def _movers(tenant_name: str, register_id: int, since_date: str):
+    current_risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
+    from_state = history_service.reconstruct_register_state(
+        tenant_name, register_id, history_service.date_to_utc_bound(since_date))
+    from_by_id = {r["local_id"]: r for r in from_state}
+
+    movers = []
+    for r in current_risks:
+        fr = from_by_id.get(r["local_id"])
+        if fr is None:
+            continue
+        delta = (r["score"] or 0) - (fr["score"] or 0)
+        if delta == 0:
+            continue
+        movers.append({
+            "title": r["title"] or "(untitled)",
+            "delta": delta,
+            "from_tier": score_to_tier(fr["score"]),
+            "to_tier": score_to_tier(r["score"]),
+        })
+    movers.sort(key=lambda m: -abs(m["delta"]))
+    return current_risks, movers
+
+
+def _narrative(since_date: str, total: int, movers: list) -> str:
+    if not movers:
+        return f"No risk changed severity band since {since_date}, out of {total} risk(s) tracked."
+    up = sum(1 for m in movers if m["delta"] > 0)
+    down = sum(1 for m in movers if m["delta"] < 0)
+    biggest = movers[0]
+    direction = "increased" if biggest["delta"] > 0 else "decreased"
+    return (
+        f"{len(movers)} of {total} risk(s) changed severity band since {since_date}: "
+        f"{up} moved to higher severity, {down} moved to lower severity. "
+        f"Largest mover: \"{biggest['title']}\" {direction} from {biggest['from_tier']} to {biggest['to_tier']}."
+    )
+
+
+def _build_narrative_page(register_name: str, since_date: str, total: int, movers: list):
+    fig, ax = plt.subplots(figsize=(11, 8.5))
+    ax.axis("off")
+    ax.text(0.5, 0.95, register_name, ha="center", fontsize=18, fontweight="bold", transform=ax.transAxes)
+    ax.text(0.5, 0.91, f"Board Report — since {since_date}", ha="center", fontsize=12, color="#555555",
+            transform=ax.transAxes)
+
+    narrative = textwrap.fill(_narrative(since_date, total, movers), width=95)
+    ax.text(0.05, 0.82, narrative, fontsize=11, va="top", transform=ax.transAxes)
+
+    if movers:
+        top5 = movers[:5]
+        rows = [[m["title"][:45], m["from_tier"], m["to_tier"], f"{m['delta']:+d}"] for m in top5]
+        table = ax.table(
+            cellText=rows, colLabels=["Top Movers", "From", "To", "Δ Score"],
+            loc="upper left", bbox=[0.05, 0.35, 0.9, 0.08 + 0.06 * len(top5)],
+        )
+        table.auto_set_font_size(False)
+        table.set_fontsize(9)
+    return fig
+
+
+def build_board_report(tenant_name: str, register_id: int, since_date: str) -> bytes:
+    current_risks, movers = _movers(tenant_name, register_id, since_date)
+    register_name = current_risks[0]["register_name"] if current_risks else "Register"
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        heatmap_fig = build_heatmap_figure(current_risks, register_name, view=None)
+        pdf.savefig(heatmap_fig)
+        plt.close(heatmap_fig)
+
+        narrative_fig = _build_narrative_page(register_name, since_date, len(current_risks), movers)
+        pdf.savefig(narrative_fig)
+        plt.close(narrative_fig)
     return buf.getvalue()

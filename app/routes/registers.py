@@ -1,5 +1,4 @@
 import json
-from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
@@ -131,9 +130,7 @@ def compare_register(request: Request, tenant_name: str, register_id: int,
     marks = db.list_reassessments(tenant_name, register_id)
 
     if not from_date:
-        from_date = marks[0]["marked_at"][:10] if marks else (
-            (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
-        )
+        from_date = history_service.default_since_date(tenant_name, register_id)
 
     from_state = history_service.reconstruct_register_state(
         tenant_name, register_id, history_service.date_to_utc_bound(from_date))

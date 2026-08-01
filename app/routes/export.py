@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from .. import db, export_service
+from .. import db, export_service, history_service
 
 router = APIRouter()
 
@@ -59,3 +59,14 @@ def export_risks_xlsx(tenant_name: str, register_id: int):
     data = export_service.rows_to_xlsx(rows, register_name)
     filename = export_service.stamped_filename(tenant_name, register_name, "risks", "xlsx")
     return _attachment(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename)
+
+
+@router.get("/tenants/{tenant_name}/registers/{register_id}/export/board-report.pdf")
+def export_board_report(tenant_name: str, register_id: int, since: str = None):
+    if not since:
+        since = history_service.default_since_date(tenant_name, register_id)
+    risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
+    register_name = _register_name(risks)
+    data = export_service.build_board_report(tenant_name, register_id, since)
+    filename = export_service.stamped_filename(tenant_name, register_name, "board_report", "pdf")
+    return _attachment(data, "application/pdf", filename)

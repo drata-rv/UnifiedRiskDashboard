@@ -8,7 +8,7 @@ itself as a normal forward edit, so replaying every row (regardless of its
 `rolled_back` flag) already reconstructs the correct history.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from . import db
 
@@ -22,6 +22,14 @@ def date_to_utc_bound(date_str: str) -> str:
 
 def now_bound() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def default_since_date(tenant_name: str, register_id: int) -> str:
+    """Latest 'Mark Reassessed' checkpoint, or 30 days ago if none exists yet."""
+    marks = db.list_reassessments(tenant_name, register_id)
+    if marks:
+        return marks[0]["marked_at"][:10]
+    return (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
 
 
 def _coerce(field: str, raw):

@@ -21,6 +21,7 @@
         <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/reassess">
           <button class="btn btn-outline" type="submit">Mark Reassessed</button>
         </form>
+        <a class="btn btn-outline" href="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/export/board-report.pdf">Board Report</a>
       </div>
       <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/push">
         <button class="btn btn-outline" type="submit">Push Data to Drata</button>
