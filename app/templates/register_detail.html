@@ -15,6 +15,13 @@
         <a class="btn btn-outline" href="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/export/risks.csv">Risks CSV</a>
         <a class="btn btn-outline" href="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/export/risks.xlsx">Risks XLSX</a>
       </div>
+      <div class="export-group">
+        <span class="muted">History:</span>
+        <a class="btn btn-outline" href="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/compare">Compare Snapshots</a>
+        <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/reassess">
+          <button class="btn btn-outline" type="submit">Mark Reassessed</button>
+        </form>
+      </div>
       <form class="inline" method="post" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/push">
         <button class="btn btn-outline" type="submit">Push Data to Drata</button>
       </form>

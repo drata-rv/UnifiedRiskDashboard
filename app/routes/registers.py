@@ -1,9 +1,10 @@
 import json
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Form, HTTPException, Request
+from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse
 
-from .. import audit, db, locks, sync_service
+from .. import audit, db, history_service, locks, sync_service
 from ..heatmap import build_heatmap, grid_size as compute_grid_size, seq_map
 from ..models import score_to_tier
 from ..templating import templates
@@ -113,4 +114,72 @@ def push_register(request: Request, tenant_name: str, register_id: int):
     return templates.TemplateResponse(request, "sync_result.html", {
         "result": result,
         "back_url": f"/tenants/{tenant_name}/registers/{register_id}",
+    })
+
+
+@router.post("/tenants/{tenant_name}/registers/{register_id}/reassess")
+def mark_reassessed(request: Request, tenant_name: str, register_id: int):
+    db.record_reassessment(tenant_name, register_id, get_current_user(request))
+    return RedirectResponse(f"/tenants/{tenant_name}/registers/{register_id}", status_code=303)
+
+
+@router.get("/tenants/{tenant_name}/registers/{register_id}/compare")
+def compare_register(request: Request, tenant_name: str, register_id: int,
+                      from_date: str = Query(None, alias="from"), to_date: str = Query(None, alias="to")):
+    current_risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
+    register_name = current_risks[0]["register_name"] if current_risks else "Register"
+    marks = db.list_reassessments(tenant_name, register_id)
+
+    if not from_date:
+        from_date = marks[0]["marked_at"][:10] if marks else (
+            (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+        )
+
+    from_state = history_service.reconstruct_register_state(
+        tenant_name, register_id, history_service.date_to_utc_bound(from_date))
+    if to_date:
+        to_state = history_service.reconstruct_register_state(
+            tenant_name, register_id, history_service.date_to_utc_bound(to_date))
+    else:
+        to_state = [dict(r) for r in current_risks]
+
+    size = compute_grid_size(from_state + to_state)
+    seq = seq_map(to_state)
+    from_inherent_grid, _ = build_heatmap(from_state, size, "impact", "likelihood", seq)
+    to_inherent_grid, _ = build_heatmap(to_state, size, "impact", "likelihood", seq)
+    from_residual_grid, _ = build_heatmap(from_state, size, "residual_impact", "residual_likelihood", seq)
+    to_residual_grid, _ = build_heatmap(to_state, size, "residual_impact", "residual_likelihood", seq)
+
+    from_by_id = {r["local_id"]: r for r in from_state}
+    deltas = []
+    for r in to_state:
+        fr = from_by_id.get(r["local_id"])
+        if fr is None:
+            continue
+        d = {
+            "risk": r,
+            "seq": seq[r["local_id"]],
+            "from_tier": score_to_tier(fr["score"]),
+            "to_tier": score_to_tier(r["score"]),
+            "from_residual_tier": score_to_tier(fr["residual_score"]),
+            "to_residual_tier": score_to_tier(r["residual_score"]),
+        }
+        d["moved"] = d["from_tier"] != d["to_tier"] or d["from_residual_tier"] != d["to_residual_tier"]
+        deltas.append(d)
+    deltas.sort(key=lambda d: (not d["moved"], -(d["risk"]["score"] or 0)))
+
+    return templates.TemplateResponse(request, "compare.html", {
+        "tenant_name": tenant_name,
+        "register_id": register_id,
+        "register_name": register_name,
+        "from_date": from_date,
+        "to_date": to_date,
+        "marks": marks,
+        "grid_size": size,
+        "from_inherent_grid": from_inherent_grid,
+        "to_inherent_grid": to_inherent_grid,
+        "from_residual_grid": from_residual_grid,
+        "to_residual_grid": to_residual_grid,
+        "deltas": deltas,
+        "moved_count": sum(1 for d in deltas if d["moved"]),
     })

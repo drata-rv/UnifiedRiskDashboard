@@ -214,6 +214,7 @@ h1.page-title { font-size: 24px; font-weight: 700; margin: 0 0 4px 0; }
 .tier-row-Moderate { background: var(--background-warning-mild); }
 .tier-row-Low      { background: var(--background-success-mild); }
 .tier-row-Unscored { background: var(--background-neutral-emphasis-mild); }
+.row-moved { background: var(--background-warning-mild); }
 
 .grade-cell {
   display: inline-flex; align-items: center; justify-content: center;

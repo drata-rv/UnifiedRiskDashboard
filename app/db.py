@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS users (
     email        TEXT,
     PRIMARY KEY (tenant_name, user_id)
 );
+
+CREATE TABLE IF NOT EXISTS reassessments (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_name   TEXT NOT NULL,
+    register_id   INTEGER NOT NULL,
+    marked_by     TEXT NOT NULL,
+    marked_at     TEXT NOT NULL
+);
 """
 
 
@@ -141,6 +149,11 @@ def upsert_risk_from_api(tenant_name: str, register_id: int, register_name: str,
     write can't get silently clobbered by an in-flight pull.
     """
     with tx() as conn:
+        existing = conn.execute(
+            "SELECT local_id FROM risks WHERE tenant_name=? AND register_id=? AND drata_id=?",
+            (tenant_name, register_id, risk.id),
+        ).fetchone()
+
         conn.execute(
             """
             INSERT INTO risks (
@@ -169,6 +182,48 @@ def upsert_risk_from_api(tenant_name: str, register_id: int, register_name: str,
                 risk.treatment_plan, risk.treatment_details, risk.status,
                 json.dumps(risk.owners), json.dumps(risk.categories), now(),
             ),
+        )
+
+        if existing is None:
+            new_row = conn.execute(
+                "SELECT local_id FROM risks WHERE tenant_name=? AND register_id=? AND drata_id=?",
+                (tenant_name, register_id, risk.id),
+            ).fetchone()
+            _record_baseline(conn, new_row["local_id"], tenant_name, risk.risk_id, risk)
+
+
+# A risk's audit trail only starts at its first UI edit, which means history
+# reconstruction couldn't reach further back than that — not to "as first
+# pulled". Recording one baseline row per non-empty editable field (only on
+# a genuine insert, never on a refresh) gives reconstruction a real anchor,
+# using the exact same audit_log replay mechanism as a normal edit — no
+# special-casing needed for "how a risk looked when it appeared".
+_BASELINE_SOURCE = "Drata Sync (initial pull)"
+
+
+def _record_baseline(conn, local_id: int, tenant_name: str, risk_code: str, risk) -> None:
+    ts = now()
+    fields = {
+        "title": risk.title,
+        "description": risk.description,
+        "impact": risk.impact,
+        "likelihood": risk.likelihood,
+        "treatment_plan": risk.treatment_plan,
+        "treatment_details": risk.treatment_details,
+        "status": risk.status,
+        "residual_impact": risk.residual_impact,
+        "residual_likelihood": risk.residual_likelihood,
+        "owners_json": json.dumps(risk.owners) if risk.owners else None,
+    }
+    for field, value in fields.items():
+        if value is None:
+            continue
+        conn.execute(
+            """
+            INSERT INTO audit_log (local_risk_id, tenant_name, risk_code, field, old_value, new_value, changed_by, changed_at)
+            VALUES (?,?,?,?,NULL,?,?,?)
+            """,
+            (local_id, tenant_name, risk_code, field, str(value), _BASELINE_SOURCE, ts),
         )
 
 
@@ -287,4 +342,35 @@ def list_users(tenant_name: str) -> list:
     return conn.execute(
         "SELECT user_id, name, email FROM users WHERE tenant_name=? ORDER BY name",
         (tenant_name,),
+    ).fetchall()
+
+
+# ---------------------------------------------------------------------------
+# Reassessments — manual "we reviewed this register" checkpoints. A register
+# has no table of its own (register identity is denormalized on `risks`
+# rows), so this is intentionally its own small table rather than piggy-
+# backing on audit_log, which is per-risk (local_risk_id NOT NULL).
+# ---------------------------------------------------------------------------
+
+def record_reassessment(tenant_name: str, register_id: int, marked_by: str) -> None:
+    with tx() as conn:
+        conn.execute(
+            "INSERT INTO reassessments (tenant_name, register_id, marked_by, marked_at) VALUES (?,?,?,?)",
+            (tenant_name, register_id, marked_by, now()),
+        )
+
+
+def latest_reassessment(tenant_name: str, register_id: int):
+    conn = get_connection()
+    return conn.execute(
+        "SELECT * FROM reassessments WHERE tenant_name=? AND register_id=? ORDER BY id DESC LIMIT 1",
+        (tenant_name, register_id),
+    ).fetchone()
+
+
+def list_reassessments(tenant_name: str, register_id: int) -> list:
+    conn = get_connection()
+    return conn.execute(
+        "SELECT * FROM reassessments WHERE tenant_name=? AND register_id=? ORDER BY id DESC",
+        (tenant_name, register_id),
     ).fetchall()

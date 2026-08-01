@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Compare &middot; {{ register_name }} &middot; FirstService Risk Dashboard{% endblock %}
+{% block content %}
+  <div class="breadcrumb"><a href="/">All registers</a> / <a href="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}">{{ register_name }}</a> /</div>
+  <div class="page-header">
+    <div>
+      <h1 class="page-title">Compare Snapshots</h1>
+      <div class="muted">{{ tenant_name }} &middot; {{ register_name }} &middot; <strong>{{ moved_count }}</strong> risk(s) changed severity band</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <form class="inline" method="get" action="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/compare">
+      <label class="muted">From <input class="field" type="date" name="from" value="{{ from_date }}"></label>
+      <label class="muted">To <input class="field" type="date" name="to" value="{{ to_date or '' }}" placeholder="current"></label>
+      <button class="btn btn-primary" type="submit">Compare</button>
+    </form>
+    {% if marks %}
+      <div class="muted" style="margin-top:8px">
+        Quick pick — vs reassessment:
+        {% for m in marks[:5] %}
+          <a href="/tenants/{{ tenant_name | urlencode }}/registers/{{ register_id }}/compare?from={{ m.marked_at[:10] }}">{{ m.marked_at[:10] }}</a>{% if not loop.last %} &middot; {% endif %}
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="heatmap-wrap">
+    <div class="card">
+      <div class="card-title">Inherent Risk &mdash; As of {{ from_date }}</div>
+      <div class="heatmap-scroll">
+      <table class="heatmap">
+        <tr><th></th>{% for l in range(1, grid_size + 1) %}<th>{{ l | level_label }}</th>{% endfor %}</tr>
+        {% for row in from_inherent_grid %}
+          <tr>
+            <th>{{ row[0].impact | level_label }}</th>
+            {% for cell in row %}
+              <td class="heatcell tier-badge-{{ cell.tier_class }}">
+                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Inherent Risk &mdash; {% if to_date %}As of {{ to_date }}{% else %}Current{% endif %}</div>
+      <div class="heatmap-scroll">
+      <table class="heatmap">
+        <tr><th></th>{% for l in range(1, grid_size + 1) %}<th>{{ l | level_label }}</th>{% endfor %}</tr>
+        {% for row in to_inherent_grid %}
+          <tr>
+            <th>{{ row[0].impact | level_label }}</th>
+            {% for cell in row %}
+              <td class="heatcell tier-badge-{{ cell.tier_class }}">
+                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="heatmap-wrap">
+    <div class="card">
+      <div class="card-title">Residual Risk &mdash; As of {{ from_date }}</div>
+      <div class="heatmap-scroll">
+      <table class="heatmap">
+        <tr><th></th>{% for l in range(1, grid_size + 1) %}<th>{{ l | level_label }}</th>{% endfor %}</tr>
+        {% for row in from_residual_grid %}
+          <tr>
+            <th>{{ row[0].impact | level_label }}</th>
+            {% for cell in row %}
+              <td class="heatcell tier-badge-{{ cell.tier_class }}">
+                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Residual Risk &mdash; {% if to_date %}As of {{ to_date }}{% else %}Current{% endif %}</div>
+      <div class="heatmap-scroll">
+      <table class="heatmap">
+        <tr><th></th>{% for l in range(1, grid_size + 1) %}<th>{{ l | level_label }}</th>{% endfor %}</tr>
+        {% for row in to_residual_grid %}
+          <tr>
+            <th>{{ row[0].impact | level_label }}</th>
+            {% for cell in row %}
+              <td class="heatcell tier-badge-{{ cell.tier_class }}">
+                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
+              </td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Risk Movement</div>
+    <div style="overflow-x:auto">
+    <table class="data">
+      <tr>
+        <th>#</th><th>Risk Statement</th><th>Inherent</th><th>Residual</th>
+      </tr>
+      {% for d in deltas %}
+        <tr{% if d.moved %} class="row-moved"{% endif %}>
+          <td>#{{ d.seq }}</td>
+          <td>{{ d.risk.title }}</td>
+          <td>
+            <span class="grade-cell tier-badge-{{ d.from_tier | replace(' ', '') }}">{{ d.from_tier }}</span>
+            {% if d.from_tier != d.to_tier %} &rarr; <span class="grade-cell tier-badge-{{ d.to_tier | replace(' ', '') }}">{{ d.to_tier }}</span>{% endif %}
+          </td>
+          <td>
+            <span class="grade-cell tier-badge-{{ d.from_residual_tier | replace(' ', '') }}">{{ d.from_residual_tier }}</span>
+            {% if d.from_residual_tier != d.to_residual_tier %} &rarr; <span class="grade-cell tier-badge-{{ d.to_residual_tier | replace(' ', '') }}">{{ d.to_residual_tier }}</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+    </div>
+  </div>
+{% endblock %}
