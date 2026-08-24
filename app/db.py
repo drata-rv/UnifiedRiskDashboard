@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
     changed_at     TEXT NOT NULL,
     rolled_back    INTEGER NOT NULL DEFAULT 0
 );
+CREATE INDEX IF NOT EXISTS idx_audit_log_risk ON audit_log(local_risk_id, id);
 
 CREATE TABLE IF NOT EXISTS users (
     tenant_name  TEXT NOT NULL,
@@ -196,7 +197,16 @@ def upsert_risk_from_api(tenant_name: str, register_id: int, register_name: str,
                 "SELECT local_id FROM risks WHERE tenant_name=? AND register_id=? AND drata_id=?",
                 (tenant_name, register_id, risk.id),
             ).fetchone()
-            _record_baseline(conn, new_row["local_id"], tenant_name, risk.risk_id, risk)
+            local_id = new_row["local_id"]
+            # existing/INSERT above isn't atomic as a pair — two concurrent pulls of
+            # the same brand-new risk can both see existing=None. Guard the baseline
+            # write itself so a duplicate can't slip through even if that happens.
+            already_baselined = conn.execute(
+                "SELECT 1 FROM audit_log WHERE local_risk_id=? AND changed_by=? LIMIT 1",
+                (local_id, _BASELINE_SOURCE),
+            ).fetchone()
+            if not already_baselined:
+                _record_baseline(conn, local_id, tenant_name, risk.risk_id, risk)
 
 
 # A risk's audit trail only starts at its first UI edit, which means history
@@ -220,7 +230,7 @@ def _record_baseline(conn, local_id: int, tenant_name: str, risk_code: str, risk
         "status": risk.status,
         "residual_impact": risk.residual_impact,
         "residual_likelihood": risk.residual_likelihood,
-        "owners_json": json.dumps(risk.owners) if risk.owners else None,
+        "owners_json": json.dumps(risk.owners),
     }
     for field, value in fields.items():
         if value is None:
@@ -424,9 +434,17 @@ def is_reassessment_due(tenant_name: str, register_id: int) -> bool:
     if mark:
         reference = mark["marked_at"]
     else:
+        # last_pulled_at is refreshed on every sync, so it can't anchor "how long
+        # since this register was last reviewed" — it would never accumulate.
+        # The one-time baseline audit rows (written only on a risk's first pull,
+        # never updated again) are the real "first seen" anchor.
         pulled = conn.execute(
-            "SELECT MIN(last_pulled_at) AS earliest FROM risks WHERE tenant_name=? AND register_id=? AND last_pulled_at IS NOT NULL",
-            (tenant_name, register_id),
+            """
+            SELECT MIN(a.changed_at) AS earliest
+            FROM audit_log a JOIN risks r ON r.local_id = a.local_risk_id
+            WHERE r.tenant_name=? AND r.register_id=? AND a.changed_by=?
+            """,
+            (tenant_name, register_id, _BASELINE_SOURCE),
         ).fetchone()
         reference = pulled["earliest"] if pulled else None
     if not reference:

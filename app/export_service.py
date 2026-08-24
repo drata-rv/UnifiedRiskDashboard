@@ -12,6 +12,7 @@ import io
 import json
 import re
 import textwrap
+import threading
 
 import matplotlib
 matplotlib.use("Agg")
@@ -27,6 +28,11 @@ from .models import STATUS_LABELS, TIER_COLORS, TIER_ROW_COLORS, TREATMENT_LABEL
 
 _SLUG_RE = re.compile(r"[^A-Za-z0-9]+")
 _SHEET_INVALID_RE = re.compile(r"[\[\]:\*\?/\\]")
+
+# matplotlib's pyplot module keeps a single global "current figure" — FastAPI
+# runs sync routes on a threadpool, so two concurrent exports could otherwise
+# interleave figure creation/save/close across threads. Serialize all of it.
+_PLOT_LOCK = threading.Lock()
 
 
 def _slug(s: str) -> str:
@@ -92,11 +98,14 @@ def build_heatmap_figure(risks: list, register_name: str, view: str = None):
 
 
 def render_heatmap(risks: list, register_name: str, fmt: str, view: str = None) -> bytes:
-    fig = build_heatmap_figure(risks, register_name, view)
-    buf = io.BytesIO()
-    fig.savefig(buf, format=fmt, bbox_inches="tight")
-    plt.close(fig)
-    return buf.getvalue()
+    with _PLOT_LOCK:
+        fig = build_heatmap_figure(risks, register_name, view)
+        try:
+            buf = io.BytesIO()
+            fig.savefig(buf, format=fmt, bbox_inches="tight")
+            return buf.getvalue()
+        finally:
+            plt.close(fig)
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +134,9 @@ _EXPORT_COLUMNS = [
 _COLUMN_WIDTHS = [12, 34, 40, 18, 18, 12, 12, 8, 12, 16, 34, 12, 14, 16, 14, 16]
 
 
-def build_register_rows(tenant_name: str, register_id: int) -> list:
-    risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
+def build_register_rows(tenant_name: str, register_id: int, risks: list = None) -> list:
+    if risks is None:
+        risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
     rows = []
     for r in risks:
         owners = json.loads(r["owners_json"]) if r["owners_json"] else []
@@ -202,28 +212,42 @@ def rows_to_xlsx(rows: list, register_name: str) -> bytes:
 # integration to maintain.
 # ---------------------------------------------------------------------------
 
-def _movers(tenant_name: str, register_id: int, since_date: str):
-    current_risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
-    from_state = history_service.reconstruct_register_state(
-        tenant_name, register_id, history_service.date_to_utc_bound(since_date))
+def _movers(current_risks: list, from_state: list) -> list:
+    """
+    A risk "moved" if its inherent OR residual severity band changed —
+    matching /compare's definition (registers.py's compare_register). Each
+    mover headlines whichever band actually moved (inherent takes precedence
+    when both did) so the narrative/table stay consistent with the compare
+    view instead of silently dropping residual-only moves.
+    """
     from_by_id = {r["local_id"]: r for r in from_state}
-
     movers = []
     for r in current_risks:
         fr = from_by_id.get(r["local_id"])
         if fr is None:
             continue
-        delta = (r["score"] or 0) - (fr["score"] or 0)
-        if delta == 0:
+        from_tier = score_to_tier(fr["score"])
+        to_tier = score_to_tier(r["score"])
+        from_res_tier = score_to_tier(fr["residual_score"])
+        to_res_tier = score_to_tier(r["residual_score"])
+        inherent_changed = from_tier != to_tier
+        residual_changed = from_res_tier != to_res_tier
+        if not inherent_changed and not residual_changed:
             continue
+        if inherent_changed:
+            headline_from, headline_to = from_tier, to_tier
+            headline_delta = (r["score"] or 0) - (fr["score"] or 0)
+        else:
+            headline_from, headline_to = from_res_tier, to_res_tier
+            headline_delta = (r["residual_score"] or 0) - (fr["residual_score"] or 0)
         movers.append({
             "title": r["title"] or "(untitled)",
-            "delta": delta,
-            "from_tier": score_to_tier(fr["score"]),
-            "to_tier": score_to_tier(r["score"]),
+            "delta": headline_delta,
+            "from_tier": headline_from,
+            "to_tier": headline_to,
         })
     movers.sort(key=lambda m: -abs(m["delta"]))
-    return current_risks, movers
+    return movers
 
 
 def _narrative(since_date: str, total: int, movers: list) -> str:
@@ -263,16 +287,21 @@ def _build_narrative_page(register_name: str, since_date: str, total: int, mover
 
 
 def build_board_report(tenant_name: str, register_id: int, since_date: str) -> bytes:
-    current_risks, movers = _movers(tenant_name, register_id, since_date)
+    current_risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
     register_name = current_risks[0]["register_name"] if current_risks else "Register"
+    from_state = history_service.reconstruct_register_state(
+        tenant_name, register_id, history_service.date_to_utc_bound(since_date))
+    movers = _movers(current_risks, from_state)
 
-    buf = io.BytesIO()
-    with PdfPages(buf) as pdf:
+    with _PLOT_LOCK:
         heatmap_fig = build_heatmap_figure(current_risks, register_name, view=None)
-        pdf.savefig(heatmap_fig)
-        plt.close(heatmap_fig)
-
         narrative_fig = _build_narrative_page(register_name, since_date, len(current_risks), movers)
-        pdf.savefig(narrative_fig)
-        plt.close(narrative_fig)
-    return buf.getvalue()
+        try:
+            buf = io.BytesIO()
+            with PdfPages(buf) as pdf:
+                pdf.savefig(heatmap_fig)
+                pdf.savefig(narrative_fig)
+            return buf.getvalue()
+        finally:
+            plt.close(heatmap_fig)
+            plt.close(narrative_fig)

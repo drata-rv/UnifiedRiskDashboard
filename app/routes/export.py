@@ -1,7 +1,8 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from .. import db, export_service, history_service
+from ..user_auth import get_current_user
 
 router = APIRouter()
 
@@ -22,7 +23,8 @@ def _attachment(data: bytes, media_type: str, filename: str) -> Response:
 
 
 @router.get("/tenants/{tenant_name}/registers/{register_id}/export/heatmap.png")
-def export_heatmap_png(tenant_name: str, register_id: int, view: str = None):
+def export_heatmap_png(request: Request, tenant_name: str, register_id: int, view: str = None):
+    get_current_user(request)
     _validate_view(view)
     risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
     register_name = _register_name(risks)
@@ -32,7 +34,8 @@ def export_heatmap_png(tenant_name: str, register_id: int, view: str = None):
 
 
 @router.get("/tenants/{tenant_name}/registers/{register_id}/export/heatmap.pdf")
-def export_heatmap_pdf(tenant_name: str, register_id: int, view: str = None):
+def export_heatmap_pdf(request: Request, tenant_name: str, register_id: int, view: str = None):
+    get_current_user(request)
     _validate_view(view)
     risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
     register_name = _register_name(risks)
@@ -42,27 +45,30 @@ def export_heatmap_pdf(tenant_name: str, register_id: int, view: str = None):
 
 
 @router.get("/tenants/{tenant_name}/registers/{register_id}/export/risks.csv")
-def export_risks_csv(tenant_name: str, register_id: int):
+def export_risks_csv(request: Request, tenant_name: str, register_id: int):
+    get_current_user(request)
     risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
     register_name = _register_name(risks)
-    rows = export_service.build_register_rows(tenant_name, register_id)
+    rows = export_service.build_register_rows(tenant_name, register_id, risks=risks)
     data = export_service.rows_to_csv(rows)
     filename = export_service.stamped_filename(tenant_name, register_name, "risks", "csv")
     return _attachment(data, "text/csv", filename)
 
 
 @router.get("/tenants/{tenant_name}/registers/{register_id}/export/risks.xlsx")
-def export_risks_xlsx(tenant_name: str, register_id: int):
+def export_risks_xlsx(request: Request, tenant_name: str, register_id: int):
+    get_current_user(request)
     risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)
     register_name = _register_name(risks)
-    rows = export_service.build_register_rows(tenant_name, register_id)
+    rows = export_service.build_register_rows(tenant_name, register_id, risks=risks)
     data = export_service.rows_to_xlsx(rows, register_name)
     filename = export_service.stamped_filename(tenant_name, register_name, "risks", "xlsx")
     return _attachment(data, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename)
 
 
 @router.get("/tenants/{tenant_name}/registers/{register_id}/export/board-report.pdf")
-def export_board_report(tenant_name: str, register_id: int, since: str = None):
+def export_board_report(request: Request, tenant_name: str, register_id: int, since: str = None):
+    get_current_user(request)
     if not since:
         since = history_service.default_since_date(tenant_name, register_id)
     risks = db.list_risks(tenant_name=tenant_name, register_id=register_id)

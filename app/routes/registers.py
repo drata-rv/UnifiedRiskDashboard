@@ -120,7 +120,13 @@ def push_register(request: Request, tenant_name: str, register_id: int):
 
 @router.post("/tenants/{tenant_name}/registers/{register_id}/reassess")
 def mark_reassessed(request: Request, tenant_name: str, register_id: int):
-    db.record_reassessment(tenant_name, register_id, get_current_user(request))
+    user = get_current_user(request)
+    # Marking a register reassessed is a compliance assertion ("I reviewed
+    # this"), same stakes as an edit — require the same lock ownership
+    # edit_risk does, so it can't fire while someone else is mid-review.
+    if not locks.acquire_or_heartbeat(tenant_name, register_id, user):
+        return RedirectResponse(f"/tenants/{tenant_name}/registers/{register_id}?lock_lost=1", status_code=303)
+    db.record_reassessment(tenant_name, register_id, user)
     return RedirectResponse(f"/tenants/{tenant_name}/registers/{register_id}", status_code=303)
 
 

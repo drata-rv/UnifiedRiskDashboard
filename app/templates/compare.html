@@ -36,7 +36,7 @@
             <th>{{ row[0].impact | level_label }}</th>
             {% for cell in row %}
               <td class="heatcell tier-badge-{{ cell.tier_class }}">
-                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
+                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#cmp-{{ id }}" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
               </td>
             {% endfor %}
           </tr>
@@ -54,7 +54,7 @@
             <th>{{ row[0].impact | level_label }}</th>
             {% for cell in row %}
               <td class="heatcell tier-badge-{{ cell.tier_class }}">
-                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
+                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#cmp-{{ id }}" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
               </td>
             {% endfor %}
           </tr>
@@ -75,7 +75,7 @@
             <th>{{ row[0].impact | level_label }}</th>
             {% for cell in row %}
               <td class="heatcell tier-badge-{{ cell.tier_class }}">
-                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
+                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#cmp-{{ id }}" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
               </td>
             {% endfor %}
           </tr>
@@ -93,7 +93,7 @@
             <th>{{ row[0].impact | level_label }}</th>
             {% for cell in row %}
               <td class="heatcell tier-badge-{{ cell.tier_class }}">
-                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
+                <div class="heatcell-ids">{% for id in cell.ids %}<a href="#cmp-{{ id }}" class="heatcell-link">#{{ id }}</a>{% endfor %}</div>
               </td>
             {% endfor %}
           </tr>
@@ -111,7 +111,7 @@
         <th>#</th><th>Risk Statement</th><th>Inherent</th><th>Residual</th>
       </tr>
       {% for d in deltas %}
-        <tr{% if d.moved %} class="row-moved"{% endif %}>
+        <tr id="cmp-{{ d.seq }}"{% if d.moved %} class="row-moved"{% endif %}>
           <td>#{{ d.seq }}</td>
           <td>{{ d.risk.title }}</td>
           <td>
