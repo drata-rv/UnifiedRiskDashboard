@@ -1,16 +1,29 @@
 {% extends "base.html" %}
+{% macro dash_link(view, sort, tenant) %}/?view={{ view }}{% if sort %}&sort={{ sort | urlencode }}{% endif %}{% if tenant %}&tenant={{ tenant | urlencode }}{% endif %}{% endmacro %}
 {% block title %}Dashboard &middot; FirstService Risk Dashboard{% endblock %}
 {% block content %}
   <div class="page-header">
     <div>
-      <h1 class="page-title">All registers</h1>
-      <div class="muted">Unified view across all tenants</div>
+      <h1 class="page-title">{{ selected_tenant or "All registers" }}</h1>
     </div>
     <div class="actions">
       <div class="export-group">
+        <span class="muted">Tenant:</span>
+        <form class="inline" method="get" action="/">
+          <select class="field" name="tenant" onchange="this.form.submit()">
+            <option value=""{% if not selected_tenant %} selected{% endif %}>All Tenants</option>
+            {% for t in all_tenants %}
+              <option value="{{ t }}"{% if t == selected_tenant %} selected{% endif %}>{{ t }}</option>
+            {% endfor %}
+          </select>
+          <input type="hidden" name="view" value="{{ active_view }}">
+          {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+        </form>
+      </div>
+      <div class="export-group">
         <span class="muted">View:</span>
-        <a class="btn {{ 'btn-primary' if active_view == 'inherent' else 'btn-outline' }}" href="/?view=inherent{% if sort %}&sort={{ sort | urlencode }}{% endif %}">Inherent</a>
-        <a class="btn {{ 'btn-primary' if active_view == 'residual' else 'btn-outline' }}" href="/?view=residual{% if sort %}&sort={{ sort | urlencode }}{% endif %}">Residual</a>
+        <a class="btn {{ 'btn-primary' if active_view == 'inherent' else 'btn-outline' }}" href="{{ dash_link('inherent', sort, selected_tenant) }}">Inherent</a>
+        <a class="btn {{ 'btn-primary' if active_view == 'residual' else 'btn-outline' }}" href="{{ dash_link('residual', sort, selected_tenant) }}">Residual</a>
       </div>
       <form class="inline" method="post" action="/sync/push">
         <button class="btn btn-outline" type="submit">Push Data to Drata</button>
@@ -32,8 +45,8 @@
       <tr>
         <th>Tenant</th>
         <th>Register</th>
-        {% for tier in tier_cols %}<th class="num"><a href="/?view={{ active_view }}&sort={{ tier | urlencode }}">{{ tier }}</a></th>{% endfor %}
-        <th class="num"><a href="/?view={{ active_view }}&sort=Total">Total</a></th>
+        {% for tier in tier_cols %}<th class="num"><a href="{{ dash_link(active_view, tier, selected_tenant) }}">{{ tier }}</a></th>{% endfor %}
+        <th class="num"><a href="{{ dash_link(active_view, 'Total', selected_tenant) }}">Total</a></th>
       </tr>
       {% for row in rows %}
         <tr>

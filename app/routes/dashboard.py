@@ -11,7 +11,7 @@ _VIEWS = ("inherent", "residual")
 
 
 @router.get("/")
-def dashboard(request: Request, view: str = None, sort: str = None):
+def dashboard(request: Request, view: str = None, sort: str = None, tenant: str = None):
     # An explicit ?view= sets the cookie (persists the choice); otherwise
     # fall back to whatever was last chosen, defaulting to inherent. There's
     # no session store in this app (Easy Auth owns login, not app state), so
@@ -22,8 +22,15 @@ def dashboard(request: Request, view: str = None, sort: str = None):
         active_view = "inherent"
     counts_key = "inherent_counts" if active_view == "inherent" else "residual_counts"
 
+    # Tenant filter is a plain query param, not persisted — it's a view filter,
+    # not a display preference, so it resets to "All Tenants" every visit.
+    all_tenants = db.list_tenants()
+    selected_tenant = tenant if tenant in all_tenants else None
+
     rows = []
-    for tenant_name in db.list_tenants():
+    for tenant_name in all_tenants:
+        if selected_tenant and tenant_name != selected_tenant:
+            continue
         for reg in db.list_registers(tenant_name):
             risks = db.list_risks(tenant_name=tenant_name, register_id=reg["register_id"])
             inherent_counts = {tier: 0 for tier in _TIER_COLS}
@@ -55,6 +62,8 @@ def dashboard(request: Request, view: str = None, sort: str = None):
         "active_view": active_view,
         "counts_key": counts_key,
         "sort": sort,
+        "all_tenants": all_tenants,
+        "selected_tenant": selected_tenant,
         "user": get_current_user(request),
     })
     if requested_view is not None:
